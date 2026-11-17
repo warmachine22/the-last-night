@@ -1,0 +1,14 @@
+node_modules/
+.DS_Store
+.env
+.env.*
+!*.example
+*.log
+coverage/
+dist/
+.cache/
+__pycache__/
+.vercel/
+assets/npc/
+*.original.glb
+*.zip

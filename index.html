@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111919">
+  <meta name="description" content="The Last Night — Meta Quest WebXR stealth survival horror in a dark forest of large cabins.">
+  <title>The Last Night</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./game.js"></script>
+</head>
+<body>
+  <div id="world" aria-hidden="true"></div>
+  <div id="shade" aria-hidden="true"></div>
+  <main id="shell">
+    <header class="masthead">
+      <strong>THE LAST NIGHT</strong>
+      <span id="build">BUILD 1.0.0</span>
+    </header>
+    <section class="hero" aria-labelledby="title" id="home">
+      <p class="eyebrow">BLACKWATER FOREST · WEBXR</p>
+      <h1 id="title">THE LAST<br><span>NIGHT</span></h1>
+      <p class="lede">Search 20 large cabins for 6 radio parts.<br>Reveal vital weak spots with your flashlight, stay quiet in the dark, and reach the Radio Tower.</p>
+      <label class="difficulty">Difficulty
+        <select id="difficulty"></select>
+      </label>
+      <div class="actions">
+        <button id="start" class="primary" disabled>Loading the forest…</button>
+        <button id="vr" disabled>Enter VR</button>
+      </div>
+      <p id="status" role="status" class="status">Preparing game assets…</p>
+      <nav class="menu-links" aria-label="Game menu">
+        <button id="help-tab" data-panel="help">Field Guide</button>
+        <button data-panel="controls">Controls</button>
+        <button data-panel="scores">Local scores</button>
+        <button data-panel="settings">Settings</button>
+      </nav>
+    </section>
+
+    <section class="sheet help-sheet" id="help" hidden aria-labelledby="help-title">
+      <div class="help-header">
+        <div>
+          <h2 id="help-title" tabindex="-1">Field Guide</h2>
+        </div>
+        <button data-back>Back to menu</button>
+      </div>
+      <section class="help-section">
+        <h3>Mission &amp; Stealth</h3>
+        <p>500 monsters lurk across this fixed forest—half inside 20 large single-floor cabins, half hidden beside trees and brush outdoors. They do not respawn. Stay silent in total darkness to slip past or lose pursuit. Running footsteps, flashlight beams, gunshots, and breaking cabin walls draw them in.</p>
+      </section>
+      <section class="help-section">
+        <h3>Flashlight &amp; Vital Weak Spots</h3>
+        <p>Monsters are invulnerable in the dark. Shine your limited, upgradable flashlight onto a monster to expose its randomized red vital region (brain, chest heart, or left/right leg). Shoot that glowing red region while the light stays on it to drop the threat. Watch out inside cabins—alerted monsters smash straight through weak interior walls.</p>
+      </section>
+      <section class="help-section">
+        <h3>Radio Parts &amp; Extraction</h3>
+        <p>Explore the cabins to recover all 6 radio parts, weapons, armor, and flashlight/weapon upgrades. Open your <strong>Map &amp; Inventory</strong> anytime to check collected parts, discovered cabins, and the <strong>Antenna Tower</strong> location—then carry the assembled parts to the tower console to escape.</p>
+      </section>
+      <button data-back>Back to menu</button>
+    </section>
+
+    <section class="sheet" id="controls" hidden aria-labelledby="controls-title">
+      <p class="eyebrow">FIELD GUIDE</p>
+      <h2 id="controls-title">Controls</h2>
+      <div class="controls-grid">
+        <div><h3>Desktop</h3><dl>
+          <dt>Move / Look</dt><dd>WASD / mouse</dd>
+          <dt>Move quietly</dt><dd>Hold Shift</dd>
+          <dt>Fire / Reload</dt><dd>Click or Space / R</dd>
+          <dt>Light / Beam</dt><dd>F / Q</dd>
+          <dt>Interact / Cycle weapon</dt><dd>E / Tab</dd>
+          <dt>Map &amp; Inventory</dt><dd>M or I</dd>
+          <dt>Pause</dt><dd>Esc</dd>
+        </dl></div>
+        <div><h3>Quest 3 WebXR</h3><dl>
+          <dt>Move / Snap turn</dt><dd>Left stick / right stick</dd>
+          <dt>Fire / Reload</dt><dd>Weapon trigger / right A</dd>
+          <dt>Cycle weapons</dt><dd>Right B</dd>
+          <dt>Light / Beam</dt><dd>Light trigger / left X</dd>
+          <dt>Pick up / Transmit</dt><dd>Weapon grip</dd>
+          <dt>Two-handed aim</dt><dd>Hold light-hand grip on foregrip</dd>
+          <dt>Pause / Map &amp; Inventory</dt><dd>Left Y (Right B switches to Map)</dd>
+        </dl></div>
+        <div><h3>Touch</h3><dl>
+          <dt>Move / Look</dt><dd>Left stick / drag right side</dd>
+          <dt>Fire / Reload / Equip</dt><dd>On-screen buttons</dd>
+          <dt>Map / Light / Beam</dt><dd>Top utility buttons</dd>
+        </dl></div>
+      </div>
+      <button data-back>Back</button>
+    </section>
+
+    <section class="sheet" id="scores" hidden aria-labelledby="scores-title">
+      <p class="eyebrow">EXTRACTION &amp; SURVIVAL RECORDS</p>
+      <h2 id="scores-title">Local scores</h2>
+      <label class="difficulty">Difficulty
+        <select id="score-difficulty"></select>
+      </label>
+      <div id="score-table"></div>
+      <button data-back>Back</button>
+    </section>
+
+    <section class="sheet" id="settings" hidden aria-labelledby="settings-title">
+      <p class="eyebrow">FIELD KIT</p>
+      <h2 id="settings-title">Settings</h2>
+      <div class="preferences">
+        <label><span>Left-handed tools<small>Weapon in the left hand</small></span><input type="checkbox" data-setting="leftHanded"></label>
+        <label><span>Seated VR<small>Calibrate standing eye height from your seated position</small></span><input type="checkbox" data-setting="seated"></label>
+        <label><span>Reduced flashes<small>Dim weapon flashes and impact effects</small></span><input type="checkbox" data-setting="reducedFlashes"></label>
+        <label><span>Brighter night<small>Lift the darkest shadows slightly</small></span><input type="checkbox" data-setting="visibility"></label>
+        <label><span>Laser dot<small>Gold on lit vital spots, gray on armor, white on cover.</small></span><input type="checkbox" data-setting="laserDot"></label>
+        <label><span>Volume</span><input type="range" min="0" max="1" step=".05" data-setting="volume"></label>
+        <label><span>Score initials</span><input id="initials" maxlength="3" autocomplete="off" spellcheck="false" value="YOU"></label>
+      </div>
+      <details class="gun-settings">
+        <summary>Gun Angle</summary>
+        <p class="note">Quest calibration. Adjust in VR for live barrel alignment.</p>
+        <div class="sight-preview" aria-hidden="true"><i id="sight-preview"></i></div>
+        <div class="preferences">
+          <label><span>Pitch <output id="gunPitch-value">0°</output></span><input type="range" min="-25" max="25" step="1" data-angle="gunPitch"></label>
+          <label><span>Yaw <output id="gunYaw-value">0°</output></span><input type="range" min="-25" max="25" step="1" data-angle="gunYaw"></label>
+        </div>
+        <button id="gun-angle-reset" type="button">Reset to Default</button>
+      </details>
+      <button data-back>Done</button>
+    </section>
+    <footer class="menu-footer"><span>FIXED WORLD · 500 THREATS</span><span>HEADPHONES RECOMMENDED</span></footer>
+  </main>
+
+  <aside id="hud" hidden aria-label="Run status">
+    <div class="hud-top">
+      <div><small>ELAPSED</small><strong id="clock">00:00</strong><small id="hud-parts">PARTS 0 / 6</small></div>
+      <div class="hud-right"><small id="weapon-name">SERVICE PISTOL</small><strong id="rounds">06 <em>/ 42</em></strong></div>
+    </div>
+    <div class="hud-bottom">
+      <div id="light-meter"><small id="light-text">WIDE · 100%</small><div class="battery-track"><i id="charge"></i></div></div>
+      <div class="hud-right"><small>ARMOR</small><strong class="pips" id="armor" aria-label="No armor">◇◇◇</strong></div>
+    </div>
+    <div id="crosshair" aria-hidden="true"></div>
+    <div id="notice" aria-live="polite"></div>
+    <div id="offer" hidden></div>
+    <div id="reload-meter" hidden><small>RELOADING</small><div class="battery-track"><i id="reload-progress"></i></div></div>
+  </aside>
+
+  <aside id="death-view" hidden aria-label="Death scene">
+    <div><strong id="death-view-reason"></strong><small id="death-view-controls"></small></div>
+    <button id="show-results">Results</button>
+  </aside>
+  <p id="radio-reply" hidden role="status"></p>
+
+  <div id="touch" hidden aria-label="Touch controls">
+    <div id="look-pad"></div>
+    <div id="stick" aria-label="Move"><i></i></div>
+    <div class="touch-utilities">
+      <button id="touch-cycle" data-touch="cycleWeapon" disabled>Cycle</button><button id="touch-light" data-touch="toggleLight">Light</button><button id="touch-beam" data-touch="toggleBeam">Beam</button><button id="touch-map" data-touch="openMap">Map</button><button data-touch="pause">Pause</button>
+    </div>
+    <div class="touch-main">
+      <button id="touch-interact" data-touch="interact">Equip</button><button data-touch="reload">Reload</button><button id="touch-fire">Fire</button>
+    </div>
+  </div>
+
+  <section id="pause" class="overlay" hidden aria-labelledby="pause-title">
+    <div class="sheet">
+      <p class="eyebrow">BLACKWATER FOREST</p>
+      <h2 id="pause-title">Paused</h2>
+      <p class="note" id="pause-note">The run is paused.</p>
+      <div class="actions">
+        <button class="primary" id="resume">Resume</button>
+        <button id="open-map">Map &amp; Inventory</button>
+        <button id="quit">Main menu</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="inventory-modal" class="overlay" hidden aria-label="Field Map and Inventory">
+    <div class="sheet map-sheet">
+      <canvas id="field-map-canvas" width="960" height="540"></canvas>
+      <div class="actions">
+        <button class="primary" id="close-map">Resume run (M / Esc)</button>
+        <button id="map-to-pause">Pause menu</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="results" class="overlay" hidden aria-labelledby="results-title">
+    <div class="sheet">
+      <p class="eyebrow" id="result-eyebrow">AFTER THE ATTACK</p>
+      <h2 id="results-title">The light went out.</h2>
+      <p id="death-reason" class="note"></p>
+      <div class="results-stats">
+        <div><small id="result-time-label">SURVIVED</small><strong id="result-time">00:00</strong></div>
+        <div><small>KILLS</small><strong id="result-kills">0</strong></div>
+        <div><small>PARTS</small><strong id="result-parts">0 / 6</strong></div>
+      </div>
+      <label class="result-initials">Score initials <input id="result-initials" maxlength="3" autocomplete="off" spellcheck="false"></label>
+      <p id="result-storage" class="note" role="status"></p>
+      <div class="actions">
+        <button class="primary" id="restart">New run</button><button id="rematch">Same seed</button>
+        <button id="look-around">Look around</button><button id="result-home">Main menu</button>
+      </div>
+    </div>
+  </section>
+</body>
+</html>
