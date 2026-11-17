@@ -23,7 +23,7 @@ const settings = loadSettings();
 const held = new Set(), queued = {};
 const audio = createAudio();
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(69, innerWidth / innerHeight, 0.044, 95);
+const camera = new THREE.PerspectiveCamera(69, innerWidth / innerHeight, 0.044, 125);
 camera.rotation.order = 'YXZ';
 const rig = new THREE.Group();
 rig.add(camera);

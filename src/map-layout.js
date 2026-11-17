@@ -18,12 +18,13 @@ export const RADIO_PARTS = [
 ];
 
 // 20 fixed large single-floor cabin sites distributed across the 672m x 672m forest.
+// Nearest cabins sit ~60-75 m from START along the main road so players spot torchlit cabins early.
 const CABIN_POSITIONS = [
   [-210, -240], [-105, -245], [135, -240], [235, -225],
-  [-245, -140], [-125, -135], [-10, -145], [115, -130], [235, -120],
+  [-245, -140], [-125, -135], [-28, -44], [115, -130], [235, -120],
   [-235, -20], [-115, -25], [115, -20], [235, -15],
   [-240, 105], [-115, 110], [110, 105], [230, 110],
-  [-180, 225], [-45, 225], [160, 225],
+  [-180, 225], [34, 88], [160, 225],
 ];
 
 export const CABIN_SITES = CABIN_POSITIONS.map(([x, z], index) => {
@@ -42,7 +43,7 @@ export const CABIN_SITES = CABIN_POSITIONS.map(([x, z], index) => {
     halfW: bounds.halfW,
     halfD: bounds.halfD,
     radius: bounds.radius,
-    lantern: index % 2 === 0,
+    lantern: true,
   };
 });
 

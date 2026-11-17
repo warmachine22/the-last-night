@@ -10,7 +10,7 @@ import { ANTENNA, CABIN_SITES, RADIO_PARTS } from './map-layout.js';
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '1.0.0';
+export const BUILD = '1.0.1';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [6, 12, 24, 50], reload: 1.5, interval: 0.31, range: 65, damage: 1.24, noise: 44, rounds: 1, spread: 0 },

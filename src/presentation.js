@@ -414,21 +414,21 @@ function makeChunk(world, area, art, lanternGlow) {
       }
       const lens = new THREE.Mesh(baseBox, lanternLens);
       lens.position.set(light.x,light.y,light.z);
-      lens.scale.set(.225,.27,.225);
+      lens.scale.set(.26,.32,.26);
       const halo = new THREE.Sprite(lanternGlow);
       halo.position.copy(lens.position);
-      halo.scale.setScalar(.78);
+      halo.scale.setScalar(1.45);
       group.add(lens,halo);
     } else if (light.type === 'beacon') {
       const tip = new THREE.Mesh(baseBox, beaconLens);
       tip.position.set(light.x, light.y, light.z);
-      tip.scale.set(.36, .42, .36);
+      tip.scale.set(.42, .48, .42);
       const halo = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: lanternGlow.map, color: 0xff3b2f, opacity: .88,
+        map: lanternGlow.map, color: 0xff3b2f, opacity: .9, fog: false,
         depthWrite: false, transparent: true, blending: THREE.AdditiveBlending, toneMapped: false,
       }));
       halo.position.copy(tip.position);
-      halo.scale.setScalar(2.6);
+      halo.scale.setScalar(3.2);
       group.add(tip, halo);
     } else {
       const fixture = new THREE.Mesh(baseBox, surfaces.trim);
@@ -570,7 +570,7 @@ export function createPresentation(scene, art, layouts) {
   const localForest = forest.clone();
   scene.add(localForest);
   scene.background = new THREE.Color(0);
-  scene.fog = new THREE.FogExp2(0x1c2731, .036);
+  scene.fog = new THREE.FogExp2(0x1c2731, .025);
   const ambient = new THREE.HemisphereLight(0x9eb7cc, 0x566270, .63);
   scene.add(ambient);
   const moon = new THREE.DirectionalLight(0xb2c7df, .34);
@@ -604,7 +604,7 @@ export function createPresentation(scene, art, layouts) {
   const offhandMuzzle = new THREE.SpotLight(0xffb77e, 0, 12, .72, .72, 1.65);
   offhandMuzzle.visible = false;
   const headlightPattern = beamTexture(true);
-  const fixtureLights = Array.from({ length:2 }, () => {
+  const fixtureLights = Array.from({ length:4 }, () => {
     const light = new THREE.SpotLight(0xffd9a0, 0, 18, .62, .66, 2);
     light.map = headlightPattern;
     light.castShadow = true;
@@ -636,7 +636,7 @@ export function createPresentation(scene, art, layouts) {
   attackerMarker.visible = false;
   scene.add(attackerMarker);
   const glow = radialTexture(), burst = radialTexture(true);
-  const lanternGlow = new THREE.SpriteMaterial({ map:glow, color:0xff952e, opacity:.57,
+  const lanternGlow = new THREE.SpriteMaterial({ map:glow, color:0xff9c38, opacity:.78, fog: false,
     depthWrite:false, transparent:true, blending:THREE.AdditiveBlending, toneMapped:false });
   const spark = new THREE.Sprite(new THREE.SpriteMaterial({ map: burst, color: 0xffcf87,
     blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
@@ -841,16 +841,16 @@ export function createPresentation(scene, art, layouts) {
       actions[clip.name].setEffectiveWeight(clip.name === 'Walk' ? 1 : 0);
     }
     const vitalMat = new THREE.MeshBasicMaterial({
-      color: 0xff2218, transparent: true, opacity: 0, depthTest: false, toneMapped: false,
+      color: 0xe62018, transparent: true, opacity: 0, depthTest: false, toneMapped: false,
     });
-    const vitalCore = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), vitalMat);
+    const vitalCore = new THREE.Mesh(new THREE.SphereGeometry(0.052, 12, 10), vitalMat);
     vitalCore.renderOrder = 20;
     const vitalHalo = new THREE.Sprite(new THREE.SpriteMaterial({
       map: glow, color: 0xff2c1a, opacity: 0, transparent: true,
       depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending, toneMapped: false,
     }));
     vitalHalo.renderOrder = 21;
-    vitalHalo.scale.setScalar(0.58);
+    vitalHalo.scale.setScalar(0.15);
     const vitalGroup = new THREE.Group();
     vitalGroup.add(vitalCore, vitalHalo);
     vitalGroup.visible = false;
@@ -884,17 +884,21 @@ export function createPresentation(scene, art, layouts) {
         v.vitalAttached = e.vitalZone;
         const targetBone = v.vitalBones[e.vitalZone] || v.character;
         targetBone.add(v.vitalGroup);
-        v.vitalGroup.position.set(0, e.vitalZone === 'body' ? 0.14 : e.vitalZone === 'head' ? 0.06 : -0.14, 0);
+        v.vitalGroup.position.set(
+          0,
+          e.vitalZone === 'body' ? 0.15 : e.vitalZone === 'head' ? 0.10 : -0.18,
+          e.vitalZone === 'head' || e.vitalZone === 'body' ? 0.025 : 0,
+        );
       }
       const glowLevel = dead ? 0 : (e.revealGlow || 0);
       v.vitalGroup.visible = glowLevel > 0.02;
       if (v.vitalGroup.visible) {
-        const pulse = 1 + 0.18 * Math.sin(run.time * 12 + e.id);
-        const radiusScale = (VITAL_ZONES[e.vitalZone]?.radius || 0.16) / 0.11;
-        v.vitalCore.scale.setScalar(radiusScale * (0.8 + 0.25 * glowLevel) * pulse);
-        v.vitalCore.material.opacity = glowLevel * 0.88;
-        v.vitalHalo.material.opacity = glowLevel * 0.92;
-        v.vitalHalo.scale.setScalar(0.55 * radiusScale * pulse);
+        const pulse = 1 + 0.1 * Math.sin(run.time * 10 + e.id);
+        const s = (0.85 + 0.15 * glowLevel) * pulse;
+        v.vitalCore.scale.set(0.92 * s, 1.22 * s, 0.85 * s);
+        v.vitalCore.material.opacity = glowLevel * 0.74;
+        v.vitalHalo.material.opacity = glowLevel * 0.28;
+        v.vitalHalo.scale.setScalar(0.15 * pulse);
       }
       if (dead && !v.bones) {
         const time = run.time - e.diedAt, rate = e.kind === 'brute' ? 1.2 : e.kind === 'shrieker' ? 2.05 : 1.48;
@@ -968,7 +972,7 @@ export function createPresentation(scene, art, layouts) {
       const headlight = source.type === 'wreck';
       light.userData.source = source;
       light.color.setHex(source.type === 'beacon' ? 0xff4636 : 0xffd9a0);
-      light.intensity = headlight ? 370 : source.type === 'beacon' ? 220 : source.type === 'lantern' ? 73 : 54;
+      light.intensity = headlight ? 370 : source.type === 'beacon' ? 240 : source.type === 'lantern' ? 125 : 88;
       light.position.set(source.x,source.y,source.z);
       light.target.position.copy(light.position).add(v3(source.ray.x,source.ray.y,source.ray.z));
       light.angle = source.angle;

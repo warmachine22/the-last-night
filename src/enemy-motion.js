@@ -9,10 +9,10 @@ export const HIT_SEGMENTS = [
 ];
 
 export const VITAL_ZONES = {
-  head: { label: 'Brain', bone: 'Head', anchors: [0, 1], radius: .16 },
-  body: { label: 'Heart', bone: 'Spine', anchors: [2, 3], radius: .21 },
-  leftLeg: { label: 'Left Leg Heart', bone: 'ThighL', anchors: [7, 8], radius: .15 },
-  rightLeg: { label: 'Right Leg Heart', bone: 'ThighR', anchors: [13, 14], radius: .15 },
+  head: { label: 'Brain', bone: 'Head', anchors: [0, 1], radius: .12 },
+  body: { label: 'Heart', bone: 'Spine', anchors: [2, 3], radius: .13 },
+  leftLeg: { label: 'Left Leg Heart', bone: 'ThighL', anchors: [7, 8], radius: .12 },
+  rightLeg: { label: 'Right Leg Heart', bone: 'ThighR', anchors: [13, 14], radius: .12 },
 };
 export const VITAL_KEYS = Object.keys(VITAL_ZONES);
 

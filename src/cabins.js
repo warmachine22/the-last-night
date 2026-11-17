@@ -453,21 +453,30 @@ export function buildCabinSite(entry, area, height, box) {
     }
   }
 
+  // Exterior porch torch/lantern at every cabin + warm interior room light
   const mainDoor = doors[0] || { x: entry.x, z: entry.z - d / 2, dir: -1, axis: 'h' };
-  if (entry.lantern) {
-    area.lights.push({
-      type: 'lantern',
-      x: mainDoor.x + (mainDoor.axis === 'h' ? 1.1 : mainDoor.dir * 0.65),
-      y: y + 2.05,
-      z: mainDoor.z + (mainDoor.axis === 'h' ? mainDoor.dir * 0.65 : 1.1),
-      ray: {
-        x: mainDoor.axis === 'v' ? mainDoor.dir * 0.45 : 0,
-        y: -0.84,
-        z: mainDoor.axis === 'h' ? mainDoor.dir * 0.54 : 0,
-      },
-      radius: 9, angle: 0.76,
-    });
-  }
+  const torchX = mainDoor.x + (mainDoor.axis === 'h' ? 1.15 : mainDoor.dir * 0.95);
+  const torchZ = mainDoor.z + (mainDoor.axis === 'h' ? mainDoor.dir * 0.95 : 1.15);
+  area.lights.push({
+    type: 'lantern',
+    x: torchX,
+    y: y + 2.25,
+    z: torchZ,
+    ray: {
+      x: mainDoor.axis === 'v' ? mainDoor.dir * 0.45 : 0,
+      y: -0.84,
+      z: mainDoor.axis === 'h' ? mainDoor.dir * 0.54 : 0,
+    },
+    radius: 12, angle: 0.85,
+  });
+  area.lights.push({
+    type: 'shelter',
+    x: entry.x,
+    y: y + h - 0.25,
+    z: entry.z,
+    ray: { x: 0, y: -0.99, z: 0.1 },
+    radius: 10, angle: 0.98,
+  });
 
   const primarySpots = bp.primary.map(([c, r]) => ({ ...cellCenter(c, r), c, r }));
   const supplySpots = bp.supplies.map(([c, r]) => ({ ...cellCenter(c, r), c, r }));
