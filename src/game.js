@@ -70,7 +70,7 @@ let aimHit = null, shotgunFiredAt = -Infinity, calibrating = false, mapMode = fa
 const direction0 = new THREE.Vector3(0, 0, -1);
 const vertical = new THREE.Vector3(0, 1, 0);
 const text = (id, value) => { $(id).textContent = value; };
-const objective = 'Search cabins for 6 radio parts. Shine your light to expose red weak spots.';
+const objective = 'Search cabins for 6 radio parts. Shine your light to expose green weak spots.';
 
 function clearInput() {
   held.clear();
@@ -550,7 +550,7 @@ function handleEvent(batch) {
     else if (event.type === 'light' && event.empty) setNotice('Battery depleted. Recharging.', 2.2);
     else if (event.type === 'deflect' && run.time > deflectHintAt + 2.8) {
       deflectHintAt = run.time;
-      setNotice(event.revealed ? 'Hit the glowing RED weak spot!' : 'Invulnerable in darkness — shine light first!', 2.2);
+      setNotice(event.revealed ? 'Hit the glowing GREEN weak spot!' : 'Invulnerable in darkness — shine light first!', 2.2);
     } else if (event.type === 'shot') {
       if (event.weapon === 'shotgun') shotgunFiredAt = run.time;
       handling.kick(settings.leftHanded);
@@ -640,7 +640,7 @@ function xrUI(sample, trackedView) {
         lines: [
           'Difficulty: ' + DIFFICULTIES[settings.difficulty].name + '   (X changes difficulty)',
           'Collect 6 radio parts from 20 large cabins.',
-          'Expose red weak spots with your flashlight before shooting.',
+          'Expose dark-green weak spots with your flashlight before shooting.',
           'Bring all parts to the Radio Tower shown on your Map.',
         ],
         hint: sample.tracked ? 'WEAPON TRIGGER  ·  START' : 'CONNECT BOTH CONTROLLERS',

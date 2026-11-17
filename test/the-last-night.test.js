@@ -200,3 +200,41 @@ test('flashlight battery remains limited and upgradable', () => {
   advance(run, 19, { lamp });
   assert.ok(run.player.battery > 0.45 && run.player.battery < 0.55);
 });
+
+test('cooperative horde tactics flank outdoors, block cabin exits/breach walls indoors, and return to cover', () => {
+  // 1) Outdoor flanking instead of single-file line
+  const run = createRun('tactics-seed', { populate: false });
+  const zList = [];
+  for (let i = 0; i < 5; i++) {
+    const z = addEnemy(run, 'shambler', run.player.x + (i - 2) * 1.5, run.player.z - 12, { dormant: false });
+    z.memory = { x: run.player.x, z: run.player.z, score: 2, reason: 'saw player', id: 'player', chase: true, until: 20 };
+    z.target = z.memory;
+    zList.push(z);
+  }
+  advance(run, 0.5, {});
+  const roles = new Set(zList.map(z => z.tactic?.role));
+  assert.ok(roles.has('pusher') && roles.has('flanker'), `expected pusher + flanker roles, got ${[...roles]}`);
+
+  // 2) Escaping into darkness sends zombies back to strategic cover & dormant ambush
+  run.player.flashlight = false;
+  run.player.x += 36;
+  advance(run, 22, {});
+  assert.ok(zList.some(z => z.dormant || z.reason === 'returning'), 'escaped zombies re-orient or return to dormant');
+
+  // 3) Indoor cabin tactics assign door blockers, wall breachers, and pushers
+  const indoorRun = createRun('indoor-tactics', { populate: false });
+  const cabin = indoorRun.world.cabins[0];
+  indoorRun.player.x = cabin.x;
+  indoorRun.player.z = cabin.z;
+  indoorRun.player.y = indoorRun.world.height(cabin.x, cabin.z);
+  const indoorZ = cabin.zombieSpots.slice(0, 6).map(spot => {
+    const z = addEnemy(indoorRun, 'shambler', spot.x, spot.z, { dormant: false, indoor: true, cabinId: cabin.id });
+    z.memory = { x: cabin.x, z: cabin.z, score: 2, reason: 'saw player', id: 'player', chase: true, until: 20 };
+    z.target = z.memory;
+    return z;
+  });
+  advance(indoorRun, 0.5, {});
+  const indoorRoles = new Set(indoorZ.map(z => z.tactic?.role));
+  assert.ok(indoorRoles.has('doorBlocker') || indoorRoles.has('breacher'),
+    `expected cabin trap roles, got ${[...indoorRoles]}`);
+});

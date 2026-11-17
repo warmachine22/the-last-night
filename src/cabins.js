@@ -516,7 +516,7 @@ export function buildCabinSite(entry, area, height, box) {
   return cabin;
 }
 
-export function findCabinStep(cabin, fromPos, toPos, allowBreak = true) {
+export function findCabinStep(cabin, fromPos, toPos, allowBreak = true, preferBreak = false) {
   const [sc, sr] = cabin.worldToCell(fromPos.x, fromPos.z);
   const [tc, tr] = cabin.worldToCell(toPos.x, toPos.z);
   if (sc === tc && sr === tr) return { target: toPos, wall: null, reachable: true };
@@ -554,7 +554,7 @@ export function findCabinStep(cabin, fromPos, toPos, allowBreak = true) {
       const bw = edge === '%' ? wallBetween(c, r, nc, nr) : null;
       const open = edgePassable(edge) || (edge === '%' && (!bw || bw.broken));
       if (!open && !(allowBreak && bw)) continue;
-      const cost = d + (open ? 1 : 2);
+      const cost = d + (open ? 1 : preferBreak ? 0.75 : 2.5);
       const nk = key(nc, nr);
       if (cost < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, cost);

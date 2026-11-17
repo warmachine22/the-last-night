@@ -7,10 +7,11 @@ import {
 import { collectPart, PARTS_REQUIRED, reachableAntenna } from './extraction.js';
 import { populateWorldRoster, syncActiveRoster } from './horde.js';
 import { ANTENNA, CABIN_SITES, RADIO_PARTS } from './map-layout.js';
+import { strategicReturnPoint, updateHordeTactics } from './tactics.js';
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '1.0.2';
+export const BUILD = '1.0.3';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [6, 12, 24, 50], reload: 1.5, interval: 0.31, range: 65, damage: 1.24, noise: 44, rounds: 1, spread: 0 },
@@ -305,6 +306,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
     nextId: 1,
     nextAttack: 0,
     nextSwarmTick: 0,
+    nextTacticsTick: 0,
     lastChunkCheck: -Infinity,
     metrics: { shots: 0, dryFire: 0, deflects: 0, wallBreaks: 0, roundsPicked: 0, upgrades: 0, pickups: {}, damage: {} },
   };
@@ -367,6 +369,10 @@ export function addEnemy(run, kind, x, z, meta = {}) {
     indoor: Boolean(meta.indoor),
     cabinId: meta.cabinId || null,
     ambushStyle: meta.ambushStyle || 'forest',
+    home: { x, z },
+    tactic: null,
+    preferBreak: false,
+    returning: null,
     memory: null,
     target: null,
     reason: 'dormant',
@@ -730,10 +736,11 @@ function perception(run, e, gap, lamps) {
   }
 
   if (best?.chase) {
+    e.returning = null;
     e.memory = { ...best, until: time + (best.reason === 'gunshot' ? rules.memorySeconds + 3 : rules.memorySeconds) };
   }
 
-  // If no current stimulus, search last-known memory until it expires, then drop back to dormant
+  // If no current stimulus, search last-known memory until it expires, then re-orient to strategic cover
   if (!best && e.memory?.until > time && distance(e, e.memory) > 1.2) {
     best = { ...e.memory, score: 0.2, reason: 'searching', chase: true };
   }
@@ -741,7 +748,18 @@ function perception(run, e, gap, lamps) {
   if (!best && e.memory && e.memory.until <= time) {
     e.memory = null;
     e.alerted = false;
-    e.dormant = true;
+    e.tactic = null;
+    e.returning = strategicReturnPoint(run, e);
+  }
+
+  if (!best && e.returning) {
+    if (distance(e, e.returning) > 1.3) {
+      best = get(e.returning.x, e.returning.z, 0.1, 'returning', 'return', false);
+    } else {
+      e.returning = null;
+      e.dormant = true;
+      e.yaw = Math.atan2(p.x - e.x, e.z - p.z);
+    }
   }
 
   const nextReason = best?.reason || (e.dormant ? 'dormant' : 'searching');
@@ -869,18 +887,45 @@ function attack(run, enemy, gap, dt) {
 }
 
 function navigate(run, e, tx, tz, dt) {
-  const cfg = ENEMIES[e.kind], { time, world } = run;
+  const cfg = ENEMIES[e.kind], { time, world, player: p } = run;
+
+  // Door blockers & corner ambushers hold strategic positions until the player gets close or shines a light
+  if ((e.tactic?.role === 'doorBlocker' && e.tactic.holdNearDoor && distance(e, p) > 2.6) ||
+      (e.tactic?.role === 'cornerWaiter' && distance(e, p) > 4.8 && !e.revealed)) {
+    const face = Math.atan2(p.x - e.x, e.z - p.z);
+    e.yaw += clamp(angleDelta(face, e.yaw), -dt * 4, dt * 4);
+    e.moveSpeed = 0;
+    e.stride = 0;
+    return;
+  }
 
   // Indoor room & doorway pathfinding + breakable wall ambush breaches
   let destX = tx, destZ = tz;
   const cabin = (e.cabinId && world.getCabin(e.cabinId)) || world.cabinAtPoint(e.x, e.z, 2.5);
-  if (cabin && (cabin.contains(e.x, e.z, 2.0) || cabin.contains(tx, tz, 1.5))) {
-    const step = findCabinStep(cabin, e, { x: tx, z: tz }, true);
-    if (step.wall && !step.wall.broken && distance(e, step.wall) < 1.85) {
+  if (e.tactic?.role === 'breacher' && e.tactic.targetWall && !e.tactic.targetWall.broken) {
+    const bw = e.tactic.targetWall;
+    if (distance(e, bw) < 2.05) {
+      e.breachWall = bw;
+      e.breach += dt;
+      e.yaw += clamp(angleDelta(Math.atan2(bw.x - e.x, e.z - bw.z), e.yaw), -dt * 6, dt * 6);
+      if (e.breach >= 0.26) {
+        breakWall(run, e, bw);
+        e.breach = 0;
+        e.breachWall = null;
+        e.tactic.targetWall = null;
+      }
+      e.moveSpeed = 0.2;
+      return;
+    }
+    destX = bw.x;
+    destZ = bw.z;
+  } else if (cabin && (cabin.contains(e.x, e.z, 2.2) || cabin.contains(tx, tz, 1.8))) {
+    const step = findCabinStep(cabin, e, { x: tx, z: tz }, true, Boolean(e.preferBreak));
+    if (step.wall && !step.wall.broken && distance(e, step.wall) < 1.95) {
       e.breachWall = step.wall;
       e.breach += dt;
       e.yaw += clamp(angleDelta(Math.atan2(step.wall.x - e.x, e.z - step.wall.z), e.yaw), -dt * 6, dt * 6);
-      if (e.breach >= 0.32) {
+      if (e.breach >= 0.28) {
         breakWall(run, e, step.wall);
         e.breach = 0;
         e.breachWall = null;
@@ -956,6 +1001,10 @@ function updateEnemies(run, dt, lamps) {
     flareAssignments(run);
     run.nextSwarmTick = time + 0.26;
   }
+  if (time >= run.nextTacticsTick) {
+    updateHordeTactics(run);
+    run.nextTacticsTick = time + 0.34;
+  }
 
   for (const e of run.enemies) {
     if (e.dead) continue;
@@ -1003,8 +1052,11 @@ function updateEnemies(run, dt, lamps) {
     if (attack(run, e, gap, dt)) continue;
     const target = e.target;
     if (target) {
-      e.route = { x: target.x, z: target.z };
-      navigate(run, e, target.x, target.z, dt);
+      const useTactic = target.chase && e.tactic && !isFlareTarget(e.reason);
+      const navX = useTactic ? e.tactic.x : target.x;
+      const navZ = useTactic ? e.tactic.z : target.z;
+      e.route = { x: navX, z: navZ };
+      navigate(run, e, navX, navZ, dt);
     } else {
       e.moveSpeed = 0;
       e.stride = 0;

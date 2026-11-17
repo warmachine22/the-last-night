@@ -842,12 +842,12 @@ export function createPresentation(scene, art, layouts) {
       actions[clip.name].setEffectiveWeight(clip.name === 'Walk' ? 1 : 0);
     }
     const vitalMat = new THREE.MeshBasicMaterial({
-      color: 0xe62018, transparent: true, opacity: 0, depthTest: false, toneMapped: false,
+      color: 0x1b6b26, transparent: true, opacity: 0, depthTest: false, toneMapped: false,
     });
     const vitalCore = new THREE.Mesh(new THREE.SphereGeometry(0.063, 12, 10), vitalMat);
     vitalCore.renderOrder = 20;
     const vitalHalo = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: glow, color: 0xff2c1a, opacity: 0, transparent: true,
+      map: glow, color: 0x22782c, opacity: 0, transparent: true,
       depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending, toneMapped: false,
     }));
     vitalHalo.renderOrder = 21;
@@ -892,8 +892,8 @@ export function createPresentation(scene, art, layouts) {
         const pulse = 1 + 0.1 * Math.sin(run.time * 10 + e.id);
         const s = (0.85 + 0.15 * glowLevel) * pulse;
         v.vitalCore.scale.set(0.95 * s, 1.18 * s, 0.90 * s);
-        v.vitalCore.material.opacity = glowLevel * 0.78;
-        v.vitalHalo.material.opacity = glowLevel * 0.30;
+        v.vitalCore.material.opacity = glowLevel * 0.66;
+        v.vitalHalo.material.opacity = glowLevel * 0.22;
         v.vitalHalo.scale.setScalar(0.18 * pulse);
       }
       if (dead && !v.bones) {
