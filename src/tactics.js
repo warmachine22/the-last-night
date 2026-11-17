@@ -1,3 +1,4 @@
+import { buildCabinExposure, cabinPointVisible } from './cabins.js';
 import { clamp, direction, distance } from './world.js';
 
 // Find the concealed side of a tree trunk relative to the player (or an observer).
@@ -8,10 +9,17 @@ function treeHideSpot(tree, fromPos) {
   return { x: tree.x + (dx / d) * pad, z: tree.z + (dz / d) * pad };
 }
 
-export function isExposedToPlayer(world, player, wx, wz) {
-  const eyePos = { x: player.x, y: player.y + (player.eyeHeight || 1.56), z: player.z };
-  const targetPos = { x: wx, y: world.height(wx, wz) + 1.15, z: wz };
-  return world.clear(eyePos, targetPos, false);
+function cabinBlockedMask(cabin, world) {
+  if (cabin._blockedMask) return cabin._blockedMask;
+  const mask = new Uint8Array(cabin.cols * cabin.rows);
+  for (let r = 0; r < cabin.rows; r++) {
+    for (let c = 0; c < cabin.cols; c++) {
+      const center = cabin.cellCenter(c, r);
+      if (world.blocks(center.x, center.z, 0.38)) mask[r * cabin.cols + c] = 1;
+    }
+  }
+  cabin._blockedMask = mask;
+  return mask;
 }
 
 // Compute a concealed exterior door-trap spot tucked outside beside the doorframe or behind the retreat arc.
@@ -37,33 +45,33 @@ function doorTrapSpot(cabin, door, slotIdx, world) {
 }
 
 // Pick an unseen room/alcove cell inside the cabin so ambushers hide out of doorway sightlines.
-function pickHiddenAmbushSpot(cabin, enemy, player, world, claimedSpots) {
+function pickHiddenAmbushSpot(cabin, enemy, player, exposureGrid, blockedMask, claimedSpots) {
   const playerRoom = cabin.roomAt(player.x, player.z);
-  const candidates = [];
-  for (const spot of cabin.zombieSpots) candidates.push(spot);
-  for (let r = 0; r < cabin.rows; r++) {
-    for (let c = 0; c < cabin.cols; c++) {
-      candidates.push({ ...cabin.cellCenter(c, r), c, r });
-    }
-  }
+  const tryCell = (c, r, best, bestScore) => {
+    const idx = r * cabin.cols + c;
+    if (claimedSpots.has(idx) || blockedMask[idx] || exposureGrid[idx] !== 0) return null;
+    const center = cabin.cellCenter(c, r);
+    const gapToPlayer = distance(center, player);
+    if (gapToPlayer < 2.8 || gapToPlayer > 14) return null;
+    const candRoom = cabin.roomAt(center.x, center.z);
+    const score = distance(enemy, center) + Math.abs(gapToPlayer - 5.2) * 0.75 + (candRoom === playerRoom ? 3.2 : 0);
+    return score < bestScore ? { ...center, idx, score } : null;
+  };
 
   let best = null, bestScore = Infinity;
-  for (const cand of candidates) {
-    const k = `${cand.c}:${cand.r}`;
-    if (claimedSpots.has(k) || world.blocks(cand.x, cand.z, 0.38)) continue;
-    const gapToPlayer = distance(cand, player);
-    if (gapToPlayer < 2.8 || gapToPlayer > 14) continue;
-    const exposed = isExposedToPlayer(world, player, cand.x, cand.z);
-    if (exposed) continue;
-    const candRoom = cabin.roomAt(cand.x, cand.z);
-    const sameRoom = candRoom === playerRoom;
-    const score = distance(enemy, cand) + Math.abs(gapToPlayer - 5.2) * 0.75 + (sameRoom ? 3.2 : 0);
-    if (score < bestScore) {
-      bestScore = score;
-      best = { ...cand, key: k };
+  for (const spot of cabin.zombieSpots) {
+    const res = tryCell(spot.c, spot.r, best, bestScore);
+    if (res) { bestScore = res.score; best = res; }
+  }
+  if (!best) {
+    for (let r = 0; r < cabin.rows; r++) {
+      for (let c = 0; c < cabin.cols; c++) {
+        const res = tryCell(c, r, best, bestScore);
+        if (res) { bestScore = res.score; best = res; }
+      }
     }
   }
-  if (best) claimedSpots.add(best.key);
+  if (best) claimedSpots.add(best.idx);
   return best;
 }
 
@@ -96,21 +104,22 @@ function pickFlankWall(cabin, enemy, player, claimedWalls) {
 }
 
 // Choose an occluded lateral or rear cell in the cabin so flankers wrap around instead of funneling down one corridor.
-function pickStealthFlankCell(cabin, enemy, player, world) {
+function pickStealthFlankCell(cabin, enemy, player, exposureGrid, blockedMask) {
   const fwd = direction(player.yaw);
   const sideBias = enemy.id % 2 === 0 ? 1 : -1;
   let best = null, bestScore = Infinity;
   for (let r = 0; r < cabin.rows; r++) {
     for (let c = 0; c < cabin.cols; c++) {
+      const idx = r * cabin.cols + c;
+      if (blockedMask[idx]) continue;
       const center = cabin.cellCenter(c, r);
-      if (world.blocks(center.x, center.z, 0.38)) continue;
       const dPlayer = distance(center, player);
       if (dPlayer < 2.2 || dPlayer > 11.5) continue;
       const dx = (center.x - player.x) / dPlayer;
       const dz = (center.z - player.z) / dPlayer;
       const frontDot = dx * fwd.x + dz * fwd.z;
       const sideDot = (dx * -fwd.z + dz * fwd.x) * sideBias;
-      const exposed = isExposedToPlayer(world, player, center.x, center.z);
+      const exposed = exposureGrid[idx] > 0;
       const score = (exposed ? 7.5 : 0) + Math.max(0, frontDot) * 4.5 - sideDot * 1.4 + Math.abs(dPlayer - 4.2) * 0.65 + distance(enemy, center) * 0.28;
       if (score < bestScore) {
         bestScore = score;
@@ -236,6 +245,8 @@ export function updateHordeTactics(run) {
 
   // 1) Cabin Trap Tactics when player is inside or right at a cabin
   if (playerCabin) {
+    const exposureGrid = buildCabinExposure(playerCabin, p, p.yaw);
+    const blockedMask = cabinBlockedMask(playerCabin, world);
     const occupied = new Map();
     const key = (c, r) => r * playerCabin.cols + c;
     for (const e of squad) {
@@ -244,7 +255,7 @@ export function updateHordeTactics(run) {
       const k = key(c, r);
       occupied.set(k, (occupied.get(k) || 0) + 1);
     }
-    run.cabinOccupied = { cabinId: playerCabin.id, cells: occupied };
+    run.cabinOccupied = { cabinId: playerCabin.id, cells: occupied, exposureGrid };
 
     const indoor = [];
     const outdoor = [];
@@ -304,7 +315,7 @@ export function updateHordeTactics(run) {
     for (const e of indoor) {
       const gap = distance(e, p);
       const enemyRoom = playerCabin.roomAt(e.x, e.z);
-      const canSeePlayer = isExposedToPlayer(world, p, e.x, e.z);
+      const canSeePlayer = cabinPointVisible(playerCabin, p, e.x, e.z);
 
       // Token 1: strictly ONE frontal pusher (plus anyone already in immediate lunge reach <= 2.3m)
       if ((pushers < 1 && (canSeePlayer || enemyRoom === playerRoom || gap < 4.5)) || gap < 2.3) {
@@ -328,7 +339,7 @@ export function updateHordeTactics(run) {
       // Slot 3: corner/alcove ambush waiters holding out of doorway sight until the player moves in
       if (waiters < 6 && gap > 3.6) {
         const currentHidden = !canSeePlayer && enemyRoom !== playerRoom && gap < 11.5;
-        const holdSpot = currentHidden ? { x: e.x, z: e.z } : pickHiddenAmbushSpot(playerCabin, e, p, world, claimedSpots);
+        const holdSpot = currentHidden ? { x: e.x, z: e.z } : pickHiddenAmbushSpot(playerCabin, e, p, exposureGrid, blockedMask, claimedSpots);
         if (holdSpot) {
           e.tactic = { role: 'cornerAmbush', x: holdSpot.x, z: holdSpot.z, room: playerCabin.roomAt(holdSpot.x, holdSpot.z) };
           e.preferBreak = false;
@@ -338,7 +349,7 @@ export function updateHordeTactics(run) {
       }
 
       // Slot 4: remaining indoor zombies take stealth LoS-avoiding flank paths to side/behind the player
-      const flankCell = pickStealthFlankCell(playerCabin, e, p, world);
+      const flankCell = pickStealthFlankCell(playerCabin, e, p, exposureGrid, blockedMask);
       e.tactic = { role: 'stealthFlanker', x: flankCell.x, z: flankCell.z };
       e.preferBreak = true;
     }

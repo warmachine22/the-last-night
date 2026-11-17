@@ -1,4 +1,4 @@
-import { findCabinStep } from './cabins.js';
+import { cabinPointVisible, findCabinStep } from './cabins.js';
 import { DIFFICULTIES, difficultyKey } from './difficulty.js';
 import {
   animatedAnchors, attackContact, attackDirection, burstPhase, BURST_BRAKE, BURST_LOAD, BURST_RUN,
@@ -7,11 +7,11 @@ import {
 import { collectPart, PARTS_REQUIRED, reachableAntenna } from './extraction.js';
 import { populateWorldRoster, syncActiveRoster } from './horde.js';
 import { ANTENNA, CABIN_SITES, RADIO_PARTS } from './map-layout.js';
-import { isExposedToPlayer, strategicReturnPoint, updateHordeTactics } from './tactics.js';
+import { strategicReturnPoint, updateHordeTactics } from './tactics.js';
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '1.0.4';
+export const BUILD = '1.0.5';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [6, 12, 24, 50], reload: 1.5, interval: 0.31, range: 65, damage: 1.24, noise: 44, rounds: 1, spread: 0 },
@@ -714,7 +714,7 @@ function perception(run, e, gap, lamps) {
   }
 
   // Noise events (running footsteps, gunshots, wallBreak crashes, attacked-zombie shrieks)
-  const playerCabin = world.cabinAtPoint(p.x, p.z, 1.5);
+  const playerCabin = run.playerCabin;
   const diffRoomIndoor = playerCabin && e.cabinId === playerCabin.id && playerCabin.roomAt(e.x, e.z) !== playerCabin.roomAt(p.x, p.z);
   for (let i = run.noises.length - 1; i >= 0; i--) {
     const n = run.noises[i], age = time - n.born, d = distance(origin, n.origin);
@@ -891,10 +891,23 @@ function attack(run, enemy, gap, dt) {
   return false;
 }
 
+function cachedCabinStep(cabin, e, tx, tz, stealthOpts, time) {
+  const [tc, tr] = cabin.worldToCell(tx, tz);
+  const goalKey = `${cabin.id}:${tc}:${tr}:${e.tactic?.role || ''}`;
+  const nav = e._cabinNav;
+  if (nav && nav.goalKey === goalKey && time < nav.until && (!nav.wall || !nav.wall.broken) &&
+      distance(e, nav.target) > 0.45) {
+    return nav;
+  }
+  const step = findCabinStep(cabin, e, { x: tx, z: tz }, stealthOpts);
+  e._cabinNav = { ...step, goalKey, until: time + 0.34 };
+  return step;
+}
+
 function navigate(run, e, tx, tz, dt) {
   const cfg = ENEMIES[e.kind], { time, world, player: p } = run;
   const role = e.tactic?.role;
-  const cabin = (e.cabinId && world.getCabin(e.cabinId)) || world.cabinAtPoint(e.x, e.z, 2.5);
+  const cabin = (e.cabinId && world.getCabin(e.cabinId)) || (run.playerCabin?.contains(e.x, e.z, 2.5) ? run.playerCabin : null);
   const gap = distance(e, p);
 
   // Exterior door sealers wait tucked beside door jambs out of doorway sight until the player steps out
@@ -909,7 +922,7 @@ function navigate(run, e, tx, tz, dt) {
   // Indoor corner ambushers hold hidden corners/rooms rather than marching into the player's doorway sightline
   if (role === 'cornerAmbush' && distance(e, e.tactic) < 1.15 && gap > 3.6) {
     const sameRoom = cabin && cabin.roomAt(e.x, e.z) === cabin.roomAt(p.x, p.z);
-    const exposed = sameRoom && isExposedToPlayer(world, p, e.x, e.z);
+    const exposed = sameRoom && cabinPointVisible(cabin, p, e.x, e.z);
     if (!exposed && !(e.revealed && gap < 4.5)) {
       const face = Math.atan2(p.x - e.x, e.z - p.z);
       e.yaw += clamp(angleDelta(face, e.yaw), -dt * 4, dt * 4);
@@ -921,15 +934,12 @@ function navigate(run, e, tx, tz, dt) {
 
   // Indoor room & doorway pathfinding + LoS-avoiding stealth flanking + breakable-wall breaches
   let destX = tx, destZ = tz;
-  const occupiedCells = cabin && run.cabinOccupied?.cabinId === cabin.id ? run.cabinOccupied.cells : null;
-  const exposedFn = pt => isExposedToPlayer(world, p, pt.x, pt.z);
+  const tac = cabin && run.cabinOccupied?.cabinId === cabin.id ? run.cabinOccupied : null;
   const stealthOpts = {
     allowBreak: role !== 'cornerAmbush',
     preferBreak: Boolean(e.preferBreak),
-    avoidPos: role === 'pusher' ? null : p,
-    avoidYaw: p.yaw,
-    isExposed: role === 'pusher' ? null : exposedFn,
-    occupiedCells,
+    exposureGrid: role === 'pusher' ? null : (tac?.exposureGrid || null),
+    occupiedCells: tac?.cells || null,
   };
 
   if (role === 'wallAmbusher' && e.tactic.targetWall && !e.tactic.targetWall.broken) {
@@ -948,14 +958,14 @@ function navigate(run, e, tx, tz, dt) {
       return;
     }
     if (cabin && cabin.contains(e.x, e.z, 2.2)) {
-      const step = findCabinStep(cabin, e, { x: tx, z: tz }, stealthOpts);
+      const step = cachedCabinStep(cabin, e, tx, tz, stealthOpts, time);
       if (step.reachable) { destX = step.target.x; destZ = step.target.z; }
     } else {
       destX = bw.x;
       destZ = bw.z;
     }
   } else if (role !== 'doorSealer' && cabin && (cabin.contains(e.x, e.z, 2.2) || cabin.contains(tx, tz, 1.8))) {
-    const step = findCabinStep(cabin, e, { x: tx, z: tz }, stealthOpts);
+    const step = cachedCabinStep(cabin, e, tx, tz, stealthOpts, time);
     if (step.wall && !step.wall.broken && distance(e, step.wall) < 1.95) {
       e.breachWall = step.wall;
       e.breach += dt;
@@ -1034,6 +1044,7 @@ function navigate(run, e, tx, tz, dt) {
 function updateEnemies(run, dt, lamps) {
   const { player: p, world, time } = run;
   syncActiveRoster(run);
+  run.playerCabin = world.cabinAtPoint(p.x, p.z, 1.8);
   if (time >= run.nextSwarmTick) {
     flareAssignments(run);
     run.nextSwarmTick = time + 0.26;

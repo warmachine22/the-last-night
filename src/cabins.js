@@ -520,16 +520,78 @@ export function buildCabinSite(entry, area, height, box) {
   return cabin;
 }
 
-// Tactical cost-modulated Dijkstra pathfinder (Game AI Pro LoS/exposure avoidance + breakable-wall flanking).
+// Fast O(cols+rows) 2D grid-edge visibility check inside a cabin (zero 3D chunk/tree raycasts).
+export function cabinPointVisible(cabin, fromPos, wx, wz) {
+  const ox = cabin.x - cabin.w / 2;
+  const oz = cabin.z - cabin.d / 2;
+  const dx = wx - fromPos.x;
+  const dz = wz - fromPos.z;
+  const clampIdx = (v, max) => (v < 0 ? 0 : v >= max ? max - 1 : v);
+
+  const wallBroken = (axis, col, row) => {
+    for (const w of cabin.breakableWalls) {
+      if (w.axis === axis && (axis === 'v' ? w.cellB[0] === col && w.cellA[1] === row : w.cellA[0] === col && w.cellB[1] === row)) {
+        return w.broken;
+      }
+    }
+    return false;
+  };
+
+  if (Math.abs(dx) > 1e-4) {
+    const cStart = Math.max(0, Math.min(cabin.cols, Math.ceil((Math.min(fromPos.x, wx) - ox) / CELL)));
+    const cEnd = Math.min(cabin.cols, Math.floor((Math.max(fromPos.x, wx) - ox) / CELL));
+    for (let c = cStart; c <= cEnd; c++) {
+      const gx = ox + c * CELL;
+      const t = (gx - fromPos.x) / dx;
+      if (t <= 0.001 || t >= 0.999) continue;
+      const z = fromPos.z + t * dz;
+      const r = clampIdx(Math.floor((z - oz) / CELL), cabin.rows);
+      const ch = cabin.verticalEdges[r]?.[c];
+      if (ch === '#' || (ch === '%' && !wallBroken('v', c, r))) return false;
+    }
+  }
+
+  if (Math.abs(dz) > 1e-4) {
+    const rStart = Math.max(0, Math.min(cabin.rows, Math.ceil((Math.min(fromPos.z, wz) - oz) / CELL)));
+    const rEnd = Math.min(cabin.rows, Math.floor((Math.max(fromPos.z, wz) - oz) / CELL));
+    for (let r = rStart; r <= rEnd; r++) {
+      const gz = oz + r * CELL;
+      const t = (gz - fromPos.z) / dz;
+      if (t <= 0.001 || t >= 0.999) continue;
+      const x = fromPos.x + t * dx;
+      const c = clampIdx(Math.floor((x - ox) / CELL), cabin.cols);
+      const ch = cabin.horizontalEdges[r]?.[c];
+      if (ch === '#' || (ch === '%' && !wallBroken('h', c, r))) return false;
+    }
+  }
+  return true;
+}
+
+// Compute a compact Uint8Array visibility/FOV map for all cells in a cabin once per tactics tick.
+export function buildCabinExposure(cabin, playerPos, playerYaw = 0) {
+  const grid = new Uint8Array(cabin.cols * cabin.rows);
+  const fx = Math.sin(playerYaw), fz = -Math.cos(playerYaw);
+  for (let r = 0; r < cabin.rows; r++) {
+    for (let c = 0; c < cabin.cols; c++) {
+      const center = cabin.cellCenter(c, r);
+      if (!cabinPointVisible(cabin, playerPos, center.x, center.z)) continue;
+      const dx = center.x - playerPos.x, dz = center.z - playerPos.z;
+      const d = Math.hypot(dx, dz) || 1;
+      const dot = (dx * fx + dz * fz) / d;
+      grid[r * cabin.cols + c] = (dot > 0.35 && d < 15) ? 2 : 1;
+    }
+  }
+  return grid;
+}
+
+// Tactical cost-modulated Dijkstra pathfinder (O(1) precomputed LoS/exposure avoidance + breakable-wall flanking).
 export function findCabinStep(cabin, fromPos, toPos, allowBreakOrOpts = true, preferBreak = false) {
   const opts = typeof allowBreakOrOpts === 'object' && allowBreakOrOpts !== null
     ? allowBreakOrOpts
     : { allowBreak: allowBreakOrOpts, preferBreak };
   const allowBreak = opts.allowBreak ?? true;
   const preferWall = opts.preferBreak ?? false;
-  const avoidPos = opts.avoidPos || null;
-  const avoidYaw = opts.avoidYaw ?? 0;
-  const isExposed = opts.isExposed || null;
+  const exposureGrid = opts.exposureGrid || null;
   const occupiedCells = opts.occupiedCells || null;
 
   const [sc, sr] = cabin.worldToCell(fromPos.x, fromPos.z);
@@ -540,7 +602,6 @@ export function findCabinStep(cabin, fromPos, toPos, allowBreakOrOpts = true, pr
   const dist = new Map([[key(sc, sr), 0]]);
   const parent = new Map();
   const queue = [[sc, sr, 0]];
-  const fx = Math.sin(avoidYaw), fz = -Math.cos(avoidYaw);
 
   const wallBetween = (c1, r1, c2, r2) => {
     if (c2 === c1 + 1) return cabin.breakableWalls.find(w => !w.broken && w.axis === 'v' && w.cellA[0] === c1 && w.cellA[1] === r1) || null;
@@ -559,8 +620,12 @@ export function findCabinStep(cabin, fromPos, toPos, allowBreakOrOpts = true, pr
   };
 
   while (queue.length) {
-    queue.sort((a, b) => a[2] - b[2]);
-    const [c, r, d] = queue.shift();
+    let bestIdx = 0;
+    for (let i = 1; i < queue.length; i++) if (queue[i][2] < queue[bestIdx][2]) bestIdx = i;
+    const [c, r, d] = queue[bestIdx];
+    queue[bestIdx] = queue[queue.length - 1];
+    queue.pop();
+
     if (c === tc && r === tr) break;
     if (d > (dist.get(key(c, r)) ?? Infinity)) continue;
     for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
@@ -575,16 +640,10 @@ export function findCabinStep(cabin, fromPos, toPos, allowBreakOrOpts = true, pr
       const nk = key(nc, nr);
       if (!(nc === tc && nr === tr)) {
         if (occupiedCells?.has(nk)) stepCost += 2.6;
-        if (avoidPos) {
-          const center = cabin.cellCenter(nc, nr);
-          const dx = center.x - avoidPos.x, dz = center.z - avoidPos.z;
-          const distToPlayer = Math.hypot(dx, dz) || 1;
-          const dot = (dx * fx + dz * fz) / distToPlayer;
-          if (isExposed && isExposed(center)) {
-            stepCost += dot > 0.35 && distToPlayer < 15 ? 9.5 : 5.5;
-          } else if (dot > 0.6 && distToPlayer < 6.5) {
-            stepCost += 3.0;
-          }
+        if (exposureGrid) {
+          const exp = exposureGrid[nk];
+          if (exp === 2) stepCost += 9.5;
+          else if (exp === 1) stepCost += 5.5;
         }
       }
 

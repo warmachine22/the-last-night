@@ -605,10 +605,11 @@ export function createPresentation(scene, art, layouts) {
   const offhandMuzzle = new THREE.SpotLight(0xffb77e, 0, 12, .72, .72, 1.65);
   offhandMuzzle.visible = false;
   const headlightPattern = beamTexture(true);
-  const fixtureLights = Array.from({ length:4 }, () => {
+  const fixtureLights = Array.from({ length: 3 }, (_, idx) => {
     const light = new THREE.SpotLight(0xffd9a0, 0, 18, .62, .66, 2);
     light.map = headlightPattern;
-    light.castShadow = true;
+    light.visible = false;
+    light.castShadow = idx < 2;
     light.shadow.autoUpdate = false;
     light.shadow.mapSize.set(256, 256);
     light.shadow.camera.near = .07;
@@ -963,7 +964,8 @@ export function createPresentation(scene, art, layouts) {
     for (const light of fixtureLights) {
       const previous = light.userData.source;
       const source = candidates.includes(previous) ? previous : unmatched.shift();
-      if (!source) { light.intensity = 0; light.userData.source = null; continue; }
+      if (!source) { light.visible = false; light.intensity = 0; light.userData.source = null; continue; }
+      light.visible = true;
       if (source === light.userData.source && !terrainChanged) continue;
       const headlight = source.type === 'wreck';
       light.userData.source = source;
@@ -975,7 +977,7 @@ export function createPresentation(scene, art, layouts) {
       light.distance = source.radius;
       light.map = headlight ? headlightPattern : lamp.map;
       light.color.setHex(headlight ? 0xffe4b1 : 0xffb465);
-      light.shadow.needsUpdate = true;
+      if (light.castShadow) light.shadow.needsUpdate = true;
     }
     return candidates;
   }
