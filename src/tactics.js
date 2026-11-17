@@ -1,4 +1,4 @@
-import { angleDelta, clamp, direction, distance } from './world.js';
+import { clamp, direction, distance } from './world.js';
 
 // Find the concealed side of a tree trunk relative to the player (or an observer).
 function treeHideSpot(tree, fromPos) {
@@ -8,11 +8,123 @@ function treeHideSpot(tree, fromPos) {
   return { x: tree.x + (dx / d) * pad, z: tree.z + (dz / d) * pad };
 }
 
+export function isExposedToPlayer(world, player, wx, wz) {
+  const eyePos = { x: player.x, y: player.y + (player.eyeHeight || 1.56), z: player.z };
+  const targetPos = { x: wx, y: world.height(wx, wz) + 1.15, z: wz };
+  return world.clear(eyePos, targetPos, false);
+}
+
+// Compute a concealed exterior door-trap spot tucked outside beside the doorframe or behind the retreat arc.
+function doorTrapSpot(cabin, door, slotIdx, world) {
+  const nx = door.axis === 'h' ? 0 : door.dir;
+  const nz = door.axis === 'h' ? door.dir : 0;
+  const tx = door.axis === 'h' ? 1 : 0;
+  const tz = door.axis === 'h' ? 0 : 1;
+  const offsets = [
+    [1.85, 1.35],
+    [1.85, -1.35],
+    [2.95, 0],
+    [2.65, 2.05],
+    [2.65, -2.05],
+  ];
+  const [outDist, sideDist] = offsets[slotIdx % offsets.length];
+  const sx = door.x + nx * outDist + tx * sideDist;
+  const sz = door.z + nz * outDist + tz * sideDist;
+  if (!world.blocks(sx, sz, 0.36)) return { x: sx, z: sz };
+  const fallbackX = door.x + nx * 2.55;
+  const fallbackZ = door.z + nz * 2.55;
+  return !world.blocks(fallbackX, fallbackZ, 0.36) ? { x: fallbackX, z: fallbackZ } : { x: door.x + nx * 3.4, z: door.z + nz * 3.4 };
+}
+
+// Pick an unseen room/alcove cell inside the cabin so ambushers hide out of doorway sightlines.
+function pickHiddenAmbushSpot(cabin, enemy, player, world, claimedSpots) {
+  const playerRoom = cabin.roomAt(player.x, player.z);
+  const candidates = [];
+  for (const spot of cabin.zombieSpots) candidates.push(spot);
+  for (let r = 0; r < cabin.rows; r++) {
+    for (let c = 0; c < cabin.cols; c++) {
+      candidates.push({ ...cabin.cellCenter(c, r), c, r });
+    }
+  }
+
+  let best = null, bestScore = Infinity;
+  for (const cand of candidates) {
+    const k = `${cand.c}:${cand.r}`;
+    if (claimedSpots.has(k) || world.blocks(cand.x, cand.z, 0.38)) continue;
+    const gapToPlayer = distance(cand, player);
+    if (gapToPlayer < 2.8 || gapToPlayer > 14) continue;
+    const exposed = isExposedToPlayer(world, player, cand.x, cand.z);
+    if (exposed) continue;
+    const candRoom = cabin.roomAt(cand.x, cand.z);
+    const sameRoom = candRoom === playerRoom;
+    const score = distance(enemy, cand) + Math.abs(gapToPlayer - 5.2) * 0.75 + (sameRoom ? 3.2 : 0);
+    if (score < bestScore) {
+      bestScore = score;
+      best = { ...cand, key: k };
+    }
+  }
+  if (best) claimedSpots.add(best.key);
+  return best;
+}
+
+// Pick an intact breakableWall on an off-axis room boundary and return its hidden side for stealth breaching.
+function pickFlankWall(cabin, enemy, player, claimedWalls) {
+  const playerRoom = cabin.roomAt(player.x, player.z);
+  const fwd = direction(player.yaw);
+  let best = null, bestScore = Infinity;
+  for (const bw of cabin.breakableWalls) {
+    if (bw.broken || claimedWalls.has(bw.id)) continue;
+    const dPlayer = distance(bw, player);
+    if (dPlayer > 12.5) continue;
+    const cellA = cabin.cellCenter(bw.cellA[0], bw.cellA[1]);
+    const cellB = cabin.cellCenter(bw.cellB[0], bw.cellB[1]);
+    const side = distance(cellA, player) >= distance(cellB, player) ? cellA : cellB;
+    const dx = (bw.x - player.x) / (dPlayer || 1);
+    const dz = (bw.z - player.z) / (dPlayer || 1);
+    const frontAlign = dx * fwd.x + dz * fwd.z;
+    const roomA = cabin.roomAt(cellA.x, cellA.z);
+    const roomB = cabin.roomAt(cellB.x, cellB.z);
+    const bordersPlayer = roomA === playerRoom || roomB === playerRoom;
+    const score = distance(enemy, side) + (frontAlign > 0.72 ? 4.5 : 0) + (bordersPlayer ? -2.2 : 1.0);
+    if (score < bestScore) {
+      bestScore = score;
+      best = { wall: bw, stage: side };
+    }
+  }
+  if (best) claimedWalls.add(best.wall.id);
+  return best;
+}
+
+// Choose an occluded lateral or rear cell in the cabin so flankers wrap around instead of funneling down one corridor.
+function pickStealthFlankCell(cabin, enemy, player, world) {
+  const fwd = direction(player.yaw);
+  const sideBias = enemy.id % 2 === 0 ? 1 : -1;
+  let best = null, bestScore = Infinity;
+  for (let r = 0; r < cabin.rows; r++) {
+    for (let c = 0; c < cabin.cols; c++) {
+      const center = cabin.cellCenter(c, r);
+      if (world.blocks(center.x, center.z, 0.38)) continue;
+      const dPlayer = distance(center, player);
+      if (dPlayer < 2.2 || dPlayer > 11.5) continue;
+      const dx = (center.x - player.x) / dPlayer;
+      const dz = (center.z - player.z) / dPlayer;
+      const frontDot = dx * fwd.x + dz * fwd.z;
+      const sideDot = (dx * -fwd.z + dz * fwd.x) * sideBias;
+      const exposed = isExposedToPlayer(world, player, center.x, center.z);
+      const score = (exposed ? 7.5 : 0) + Math.max(0, frontDot) * 4.5 - sideDot * 1.4 + Math.abs(dPlayer - 4.2) * 0.65 + distance(enemy, center) * 0.28;
+      if (score < bestScore) {
+        bestScore = score;
+        best = center;
+      }
+    }
+  }
+  return best || { x: player.x, z: player.z };
+}
+
 export function strategicReturnPoint(run, enemy) {
   const { world, player: p } = run;
   const cabin = (enemy.cabinId && world.getCabin(enemy.cabinId)) || world.cabinAtPoint(enemy.x, enemy.z, 2);
   if (cabin) {
-    // Re-orient inside a corner/room or doorway inside the cabin
     if (enemy.home && distance(enemy, enemy.home) < 28 && !world.blocks(enemy.home.x, enemy.home.z, 0.35)) {
       return { x: enemy.home.x, z: enemy.home.z };
     }
@@ -41,13 +153,13 @@ function nearestTreeCover(world, zombie, dest, player) {
   if (zToDest < 3.6) return null;
   let best = null, bestScore = Infinity;
   const midX = (zombie.x + dest.x) * 0.5, midZ = (zombie.z + dest.z) * 0.5;
-  for (const area of world.around(midX, midZ, 12)) {
+  for (const area of world.around(midX, midZ, 13)) {
     for (const tree of area.trees) {
       if (tree.r < 0.34) continue;
       const hide = treeHideSpot(tree, player);
       const dz = distance(zombie, hide), dd = distance(hide, dest);
-      if (dz + dd > zToDest + 4.5) continue;
-      if (distance(hide, player) < 3.5 || world.blocks(hide.x, hide.z, 0.35)) continue;
+      if (dz + dd > zToDest + 5.2) continue;
+      if (distance(hide, player) < 3.4 || world.blocks(hide.x, hide.z, 0.35)) continue;
       const score = dz + dd * 0.85;
       if (score < bestScore) { bestScore = score; best = hide; }
     }
@@ -55,125 +167,199 @@ function nearestTreeCover(world, zombie, dest, player) {
   return best;
 }
 
-const FLANK_ANGLES = [1.45, -1.45, 2.35, -2.35, 0.85, -0.85];
+// Bias outdoor flankers toward the player's lateral & rear arcs rather than straight ahead.
+const FLANK_ANGLES = [1.85, -1.85, 2.6, -2.6, 1.15, -1.15];
 
-// Assign cooperative swarm roles to zombies in the player's vicinity so slow zombies
-// flank from behind trees, block cabin exits, wait in corners, and smash through walls.
+// Coordinate horde tactics using combat tokens/slots, LoS-avoiding stealth flanking,
+// unseen room ambushes, interior wall breaches, and outdoor exit-sealing.
 export function updateHordeTactics(run) {
   const { player: p, world, time } = run;
-  const playerCabin = world.cabinAtPoint(p.x, p.z, 2.0);
+  const playerCabin = world.cabinAtPoint(p.x, p.z, 2.4);
   const awake = run.enemies.filter(e => !e.dead && !e.dormant && distance(e, p) < 34);
+  run.cabinOccupied = null;
 
-  // Squad awareness: if at least one zombie near the player is actively chasing, alert nearby
-  // outdoor/adjacent zombies within 18 m to coordinate flanks instead of standing idle
+  // Squad awareness & pacing (Left 4 Dead director principle: never trigger an entire building into one doorway rush)
   const primary = awake.find(e => e.target?.chase);
   if (primary) {
-    let recruited = 0;
-    for (const e of run.enemies) {
-      if (e.dead || !e.dormant) continue;
-      const d = distance(e, p);
-      if (d > 24 || distance(e, primary) > 16) continue;
-      // Indoor deeper-room zombies stay hidden as corner waiters unless very close or breached
-      if (playerCabin && e.cabinId === playerCabin.id && d > 8.5 && recruited >= 2) continue;
-      e.dormant = false;
-      e.alerted = true;
-      e.memory = { x: p.x, z: p.z, score: 1.4, reason: 'horde alert', id: 'horde', chase: true, until: time + run.rules.memorySeconds };
-      if (++recruited >= 5) break;
+    if (playerCabin) {
+      // Outdoors: silently recruit up to 2 nearby zombies outside the cabin to circle and seal exits
+      let outsideRecruited = 0;
+      for (const e of run.enemies) {
+        if (e.dead || !e.dormant || (e.cabinId === playerCabin.id && playerCabin.contains(e.x, e.z, 1.5))) continue;
+        if (distance(e, p) > 28) continue;
+        e.dormant = false;
+        e.alerted = true;
+        e.memory = { x: p.x, z: p.z, score: 1.25, reason: 'cabin trap', id: 'horde', chase: true, until: time + run.rules.memorySeconds + 2 };
+        if (++outsideRecruited >= 2) break;
+      }
+
+      // Indoors: cap rapid cascade so back-room zombies wait silently in ambush or behind breakable walls
+      const indoorAwakeCount = awake.filter(e => playerCabin.contains(e.x, e.z, 1.5)).length;
+      if (indoorAwakeCount < 4) {
+        let indoorRecruited = 0;
+        for (const e of run.enemies) {
+          if (e.dead || !e.dormant || e.cabinId !== playerCabin.id) continue;
+          const d = distance(e, p);
+          const nearWall = playerCabin.breakableWalls.some(w => !w.broken && distance(e, w) < 4.5);
+          if (d > 8.2 && !nearWall) continue;
+          e.dormant = false;
+          e.alerted = true;
+          e.memory = { x: p.x, z: p.z, score: 1.15, reason: 'indoor alert', id: 'horde', chase: true, until: time + run.rules.memorySeconds };
+          if (++indoorRecruited >= 1 || indoorAwakeCount + indoorRecruited >= 4) break;
+        }
+      }
+    } else {
+      let recruited = 0;
+      for (const e of run.enemies) {
+        if (e.dead || !e.dormant) continue;
+        const d = distance(e, p);
+        if (d > 22 || distance(e, primary) > 16) continue;
+        e.dormant = false;
+        e.alerted = true;
+        e.memory = { x: p.x, z: p.z, score: 1.35, reason: 'horde alert', id: 'horde', chase: true, until: time + run.rules.memorySeconds };
+        if (++recruited >= 4) break;
+      }
     }
   }
 
   const squad = run.enemies
-    .filter(e => !e.dead && !e.dormant && e.target?.chase && distance(e, p) < 32)
+    .filter(e => !e.dead && !e.dormant && e.target?.chase && distance(e, p) < 34)
     .sort((a, b) => distance(a, p) - distance(b, p));
 
-  if (!squad.length) return;
-
-  // Reset per-tick tactical assignments cleanly
   for (const e of run.enemies) {
-    if (e.dead) continue;
-    if (e.dormant || !e.target?.chase) {
+    if (e.dead || e.dormant || !e.target?.chase || distance(e, p) >= 34) {
       e.tactic = null;
       e.preferBreak = false;
     }
   }
+  if (!squad.length) return;
 
   // 1) Cabin Trap Tactics when player is inside or right at a cabin
   if (playerCabin) {
-    let pushers = 0, breachers = 0, blockers = 0, waiters = 0;
-    const doors = playerCabin.doors || [];
-    const assignedDoors = new Set();
-
+    const occupied = new Map();
+    const key = (c, r) => r * playerCabin.cols + c;
     for (const e of squad) {
+      if (!playerCabin.contains(e.x, e.z, 1.0)) continue;
+      const [c, r] = playerCabin.worldToCell(e.x, e.z);
+      const k = key(c, r);
+      occupied.set(k, (occupied.get(k) || 0) + 1);
+    }
+    run.cabinOccupied = { cabinId: playerCabin.id, cells: occupied };
+
+    const indoor = [];
+    const outdoor = [];
+    for (const e of squad) {
+      if (playerCabin.contains(e.x, e.z, 1.4)) indoor.push(e);
+      else outdoor.push(e);
+    }
+
+    // 1A) Outdoor exit-sealing: zombies outside approach around the cabin exterior to trap every exit,
+    // prioritizing the door closest to the player so retreating turns into an exterior ambush.
+    const sortedDoors = [...(playerCabin.doors || [])].sort((a, b) => distance(a, p) - distance(b, p));
+    const doorSlots = [];
+    if (sortedDoors.length) {
+      const cap = Math.min(4, sortedDoors.length * 2 + 1);
+      for (let i = 0; i < cap; i++) {
+        const door = sortedDoors[i === 2 && sortedDoors.length > 1 ? 1 : i % sortedDoors.length];
+        doorSlots.push({ door, spot: doorTrapSpot(playerCabin, door, i, world) });
+      }
+    }
+
+    let doorIdx = 0;
+    let outFlankIdx = 0;
+    const facing = p.yaw;
+    for (const e of outdoor) {
+      if (doorIdx < doorSlots.length) {
+        const slot = doorSlots[doorIdx++];
+        e.tactic = {
+          role: 'doorSealer',
+          cabinId: playerCabin.id,
+          doorX: slot.door.x,
+          doorZ: slot.door.z,
+          x: slot.spot.x,
+          z: slot.spot.z,
+          holdNearDoor: true,
+        };
+        e.preferBreak = false;
+        continue;
+      }
+      const angle = facing + FLANK_ANGLES[outFlankIdx % FLANK_ANGLES.length];
+      outFlankIdx++;
+      const ringDist = clamp(distance(e, p) * 0.55, 4.2, 8.2);
+      const fx = p.x + Math.sin(angle) * ringDist;
+      const fz = p.z - Math.cos(angle) * ringDist;
+      const cover = nearestTreeCover(world, e, { x: fx, z: fz }, p);
+      const dest = cover || { x: fx, z: fz };
+      e.tactic = { role: 'flanker', x: dest.x, z: dest.z };
+      e.preferBreak = false;
+    }
+
+    // 1B) Indoor tokens & stealth maneuvers:
+    // Strictly 1 frontal pusher at a time; others split across hidden corners, interior breakable walls, and stealth flank routes.
+    let pushers = 0, breachers = 0, waiters = 0;
+    const claimedWalls = new Set();
+    const claimedSpots = new Set();
+    const playerRoom = playerCabin.roomAt(p.x, p.z);
+
+    for (const e of indoor) {
       const gap = distance(e, p);
-      const inSameCabin = playerCabin.contains(e.x, e.z, 2.5);
+      const enemyRoom = playerCabin.roomAt(e.x, e.z);
+      const canSeePlayer = isExposedToPlayer(world, p, e.x, e.z);
 
-      // Door blockers: hold cabin exits so the player can't easily flee back out
-      if (blockers < Math.min(2, doors.length) && (!inSameCabin || gap > 5.5)) {
-        const door = doors
-          .filter((_, idx) => !assignedDoors.has(idx))
-          .sort((a, b) => distance(e, a) - distance(e, b))[0];
-        if (door && distance(p, door) > 2.2) {
-          const idx = doors.indexOf(door);
-          assignedDoors.add(idx);
-          const guardX = door.x + (door.axis === 'v' ? door.dir * 0.9 : 0);
-          const guardZ = door.z + (door.axis === 'h' ? door.dir * 0.9 : 0);
-          e.tactic = { role: 'doorBlocker', x: guardX, z: guardZ, holdNearDoor: distance(e, door) < 1.6 };
-          e.preferBreak = false;
-          blockers++;
-          continue;
-        }
-      }
-
-      // Wall breachers: indoor zombies in adjacent rooms smash straight through breakableWalls
-      if (inSameCabin && breachers < 3 && playerCabin.breakableWalls.some(w => !w.broken)) {
-        const nearWall = playerCabin.breakableWalls
-          .filter(w => !w.broken && distance(e, w) < 7.5 && distance(p, w) < 9.5)
-          .sort((a, b) => distance(e, a) - distance(e, b))[0];
-        if (nearWall) {
-          e.tactic = { role: 'breacher', x: p.x, z: p.z, targetWall: nearWall };
-          e.preferBreak = true;
-          breachers++;
-          continue;
-        }
-      }
-
-      // Direct pushers (keep to 1-2 so they don't form a single-file hallway line)
-      if (pushers < 2 || gap < 3.4) {
+      // Token 1: strictly ONE frontal pusher (plus anyone already in immediate lunge reach <= 2.3m)
+      if ((pushers < 1 && (canSeePlayer || enemyRoom === playerRoom || gap < 4.5)) || gap < 2.3) {
         e.tactic = { role: 'pusher', x: p.x, z: p.z };
         e.preferBreak = false;
         pushers++;
         continue;
       }
 
-      // Corner / side-room ambush waiters: hold adjacent rooms instead of flooding single-file
-      if (inSameCabin && waiters < 4 && gap > 5.0) {
-        e.tactic = { role: 'cornerWaiter', x: e.x, z: e.z };
-        e.preferBreak = false;
-        waiters++;
-        continue;
+      // Slot 2: stealth interior wall breachers attacking from hidden adjacent rooms/sides
+      if (breachers < 3 && playerCabin.breakableWalls.some(w => !w.broken)) {
+        const pick = pickFlankWall(playerCabin, e, p, claimedWalls);
+        if (pick) {
+          e.tactic = { role: 'wallAmbusher', x: pick.stage.x, z: pick.stage.z, targetWall: pick.wall };
+          e.preferBreak = true;
+          breachers++;
+          continue;
+        }
       }
 
-      e.tactic = { role: 'flanker', x: p.x, z: p.z };
+      // Slot 3: corner/alcove ambush waiters holding out of doorway sight until the player moves in
+      if (waiters < 6 && gap > 3.6) {
+        const currentHidden = !canSeePlayer && enemyRoom !== playerRoom && gap < 11.5;
+        const holdSpot = currentHidden ? { x: e.x, z: e.z } : pickHiddenAmbushSpot(playerCabin, e, p, world, claimedSpots);
+        if (holdSpot) {
+          e.tactic = { role: 'cornerAmbush', x: holdSpot.x, z: holdSpot.z, room: playerCabin.roomAt(holdSpot.x, holdSpot.z) };
+          e.preferBreak = false;
+          waiters++;
+          continue;
+        }
+      }
+
+      // Slot 4: remaining indoor zombies take stealth LoS-avoiding flank paths to side/behind the player
+      const flankCell = pickStealthFlankCell(playerCabin, e, p, world);
+      e.tactic = { role: 'stealthFlanker', x: flankCell.x, z: flankCell.z };
       e.preferBreak = true;
     }
     return;
   }
 
-  // 2) Outdoor Cooperative Flank & Tree-Cover Swarming
+  // 2) Outdoor Cooperative Flank & Tree-Cover Encirclement (2 frontal pushers max, rest wide behind trees)
   const facing = p.yaw;
+  let pushers = 0;
   let flankIdx = 0;
-  for (const [rank, e] of squad.entries()) {
+  for (const e of squad) {
     const gap = distance(e, p);
-    // Closest 1-2 pressure straight in (or if already close < 4.5 m, converge directly)
-    if (rank < 2 || gap < 4.5) {
+    if (pushers < 2 || gap < 3.6) {
       e.tactic = { role: 'pusher', x: p.x, z: p.z };
       e.preferBreak = false;
+      pushers++;
       continue;
     }
-    // Remaining squad members take wide angular flank waypoints using tree trunks for cover
     const angle = facing + FLANK_ANGLES[flankIdx % FLANK_ANGLES.length];
     flankIdx++;
-    const ringDist = clamp(gap * 0.55, 3.8, 7.5);
+    const ringDist = clamp(gap * 0.55, 4.0, 8.0);
     const fx = p.x + Math.sin(angle) * ringDist;
     const fz = p.z - Math.cos(angle) * ringDist;
     const cover = nearestTreeCover(world, e, { x: fx, z: fz }, p);

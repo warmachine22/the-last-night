@@ -7,11 +7,11 @@ import {
 import { collectPart, PARTS_REQUIRED, reachableAntenna } from './extraction.js';
 import { populateWorldRoster, syncActiveRoster } from './horde.js';
 import { ANTENNA, CABIN_SITES, RADIO_PARTS } from './map-layout.js';
-import { strategicReturnPoint, updateHordeTactics } from './tactics.js';
+import { isExposedToPlayer, strategicReturnPoint, updateHordeTactics } from './tactics.js';
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '1.0.3';
+export const BUILD = '1.0.4';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [6, 12, 24, 50], reload: 1.5, interval: 0.31, range: 65, damage: 1.24, noise: 44, rounds: 1, spread: 0 },
@@ -714,11 +714,16 @@ function perception(run, e, gap, lamps) {
   }
 
   // Noise events (running footsteps, gunshots, wallBreak crashes, attacked-zombie shrieks)
+  const playerCabin = world.cabinAtPoint(p.x, p.z, 1.5);
+  const diffRoomIndoor = playerCabin && e.cabinId === playerCabin.id && playerCabin.roomAt(e.x, e.z) !== playerCabin.roomAt(p.x, p.z);
   for (let i = run.noises.length - 1; i >= 0; i--) {
     const n = run.noises[i], age = time - n.born, d = distance(origin, n.origin);
     if (age > n.span || d >= n.radius) continue;
     const occluded = !world.clear(origin, n.origin, false);
-    const radius = n.radius * (occluded ? (n.kind === 'gunshot' ? 0.72 : 0.56) : 1);
+    const occScale = diffRoomIndoor
+      ? (n.kind === 'gunshot' ? 0.56 : n.kind === 'footsteps' ? 0.34 : 0.44)
+      : (n.kind === 'gunshot' ? 0.72 : 0.56);
+    const radius = n.radius * (occluded ? occScale : 1);
     if (d >= radius) continue;
     const weight = n.kind === 'gunshot' ? 1.32 : n.kind === 'shriek' ? 1.15 : n.kind === 'wallBreak' ? 1.18 : 0.94;
     const score = (1 - d / radius) * (1 - age / n.span) * weight;
@@ -888,10 +893,12 @@ function attack(run, enemy, gap, dt) {
 
 function navigate(run, e, tx, tz, dt) {
   const cfg = ENEMIES[e.kind], { time, world, player: p } = run;
+  const role = e.tactic?.role;
+  const cabin = (e.cabinId && world.getCabin(e.cabinId)) || world.cabinAtPoint(e.x, e.z, 2.5);
+  const gap = distance(e, p);
 
-  // Door blockers & corner ambushers hold strategic positions until the player gets close or shines a light
-  if ((e.tactic?.role === 'doorBlocker' && e.tactic.holdNearDoor && distance(e, p) > 2.6) ||
-      (e.tactic?.role === 'cornerWaiter' && distance(e, p) > 4.8 && !e.revealed)) {
+  // Exterior door sealers wait tucked beside door jambs out of doorway sight until the player steps out
+  if (role === 'doorSealer' && e.tactic.holdNearDoor && distance(e, e.tactic) < 0.9 && gap > 2.4 && (!e.revealed || gap > 4.2)) {
     const face = Math.atan2(p.x - e.x, e.z - p.z);
     e.yaw += clamp(angleDelta(face, e.yaw), -dt * 4, dt * 4);
     e.moveSpeed = 0;
@@ -899,10 +906,33 @@ function navigate(run, e, tx, tz, dt) {
     return;
   }
 
-  // Indoor room & doorway pathfinding + breakable wall ambush breaches
+  // Indoor corner ambushers hold hidden corners/rooms rather than marching into the player's doorway sightline
+  if (role === 'cornerAmbush' && distance(e, e.tactic) < 1.15 && gap > 3.6) {
+    const sameRoom = cabin && cabin.roomAt(e.x, e.z) === cabin.roomAt(p.x, p.z);
+    const exposed = sameRoom && isExposedToPlayer(world, p, e.x, e.z);
+    if (!exposed && !(e.revealed && gap < 4.5)) {
+      const face = Math.atan2(p.x - e.x, e.z - p.z);
+      e.yaw += clamp(angleDelta(face, e.yaw), -dt * 4, dt * 4);
+      e.moveSpeed = 0;
+      e.stride = 0;
+      return;
+    }
+  }
+
+  // Indoor room & doorway pathfinding + LoS-avoiding stealth flanking + breakable-wall breaches
   let destX = tx, destZ = tz;
-  const cabin = (e.cabinId && world.getCabin(e.cabinId)) || world.cabinAtPoint(e.x, e.z, 2.5);
-  if (e.tactic?.role === 'breacher' && e.tactic.targetWall && !e.tactic.targetWall.broken) {
+  const occupiedCells = cabin && run.cabinOccupied?.cabinId === cabin.id ? run.cabinOccupied.cells : null;
+  const exposedFn = pt => isExposedToPlayer(world, p, pt.x, pt.z);
+  const stealthOpts = {
+    allowBreak: role !== 'cornerAmbush',
+    preferBreak: Boolean(e.preferBreak),
+    avoidPos: role === 'pusher' ? null : p,
+    avoidYaw: p.yaw,
+    isExposed: role === 'pusher' ? null : exposedFn,
+    occupiedCells,
+  };
+
+  if (role === 'wallAmbusher' && e.tactic.targetWall && !e.tactic.targetWall.broken) {
     const bw = e.tactic.targetWall;
     if (distance(e, bw) < 2.05) {
       e.breachWall = bw;
@@ -917,10 +947,15 @@ function navigate(run, e, tx, tz, dt) {
       e.moveSpeed = 0.2;
       return;
     }
-    destX = bw.x;
-    destZ = bw.z;
-  } else if (cabin && (cabin.contains(e.x, e.z, 2.2) || cabin.contains(tx, tz, 1.8))) {
-    const step = findCabinStep(cabin, e, { x: tx, z: tz }, true, Boolean(e.preferBreak));
+    if (cabin && cabin.contains(e.x, e.z, 2.2)) {
+      const step = findCabinStep(cabin, e, { x: tx, z: tz }, stealthOpts);
+      if (step.reachable) { destX = step.target.x; destZ = step.target.z; }
+    } else {
+      destX = bw.x;
+      destZ = bw.z;
+    }
+  } else if (role !== 'doorSealer' && cabin && (cabin.contains(e.x, e.z, 2.2) || cabin.contains(tx, tz, 1.8))) {
+    const step = findCabinStep(cabin, e, { x: tx, z: tz }, stealthOpts);
     if (step.wall && !step.wall.broken && distance(e, step.wall) < 1.95) {
       e.breachWall = step.wall;
       e.breach += dt;
@@ -939,12 +974,14 @@ function navigate(run, e, tx, tz, dt) {
 
   const desired = Math.atan2(destX - e.x, e.z - destZ);
   let vx = Math.sin(desired), vz = -Math.cos(desired);
+  const sepRangeSq = cabin && role !== 'pusher' ? 1.82 : 1.12;
   for (const other of run.enemies) {
     if (other === e || other.dead || other.dormant) continue;
     const dx = e.x - other.x, dz = e.z - other.z, d = dx * dx + dz * dz;
-    if (d > 0.001 && d < 0.98) {
-      vx += dx * (0.98 - d) / Math.sqrt(d) * 1.15;
-      vz += dz * (0.98 - d) / Math.sqrt(d) * 1.15;
+    if (d > 0.001 && d < sepRangeSq) {
+      const strength = other.tactic?.role === 'pusher' && role !== 'pusher' ? 1.55 : 1.18;
+      vx += dx * (sepRangeSq - d) / Math.sqrt(d) * strength;
+      vz += dz * (sepRangeSq - d) / Math.sqrt(d) * strength;
     }
   }
 

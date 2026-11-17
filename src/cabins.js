@@ -45,7 +45,7 @@ function compileCabin(def) {
     else if (side === 'E') vEdges[idx][cols] = 'D';
   }
 
-  return { ...def, hEdges, vEdges, primary, supplies, zombies };
+  return { ...def, owner, hEdges, vEdges, primary, supplies, zombies };
 }
 
 // 20 unique realistic single-floor cabins (16x14 m up to 22x18 m) with multiple rooms, hallways, closets & breakable walls.
@@ -506,6 +506,10 @@ export function buildCabinSite(entry, area, height, box) {
       const r = Math.max(0, Math.min(rows - 1, Math.floor((wz - (entry.z - d / 2)) / CELL)));
       return [c, r];
     },
+    roomAt(wx, wz) {
+      const [c, r] = this.worldToCell(wx, wz);
+      return bp.owner?.[r]?.[c] ?? -1;
+    },
     cellCenter,
     contains(wx, wz, margin = 0.5) {
       return Math.abs(wx - entry.x) <= w / 2 + margin && Math.abs(wz - entry.z) <= d / 2 + margin;
@@ -516,7 +520,18 @@ export function buildCabinSite(entry, area, height, box) {
   return cabin;
 }
 
-export function findCabinStep(cabin, fromPos, toPos, allowBreak = true, preferBreak = false) {
+// Tactical cost-modulated Dijkstra pathfinder (Game AI Pro LoS/exposure avoidance + breakable-wall flanking).
+export function findCabinStep(cabin, fromPos, toPos, allowBreakOrOpts = true, preferBreak = false) {
+  const opts = typeof allowBreakOrOpts === 'object' && allowBreakOrOpts !== null
+    ? allowBreakOrOpts
+    : { allowBreak: allowBreakOrOpts, preferBreak };
+  const allowBreak = opts.allowBreak ?? true;
+  const preferWall = opts.preferBreak ?? false;
+  const avoidPos = opts.avoidPos || null;
+  const avoidYaw = opts.avoidYaw ?? 0;
+  const isExposed = opts.isExposed || null;
+  const occupiedCells = opts.occupiedCells || null;
+
   const [sc, sr] = cabin.worldToCell(fromPos.x, fromPos.z);
   const [tc, tr] = cabin.worldToCell(toPos.x, toPos.z);
   if (sc === tc && sr === tr) return { target: toPos, wall: null, reachable: true };
@@ -525,6 +540,7 @@ export function findCabinStep(cabin, fromPos, toPos, allowBreak = true, preferBr
   const dist = new Map([[key(sc, sr), 0]]);
   const parent = new Map();
   const queue = [[sc, sr, 0]];
+  const fx = Math.sin(avoidYaw), fz = -Math.cos(avoidYaw);
 
   const wallBetween = (c1, r1, c2, r2) => {
     if (c2 === c1 + 1) return cabin.breakableWalls.find(w => !w.broken && w.axis === 'v' && w.cellA[0] === c1 && w.cellA[1] === r1) || null;
@@ -554,8 +570,25 @@ export function findCabinStep(cabin, fromPos, toPos, allowBreak = true, preferBr
       const bw = edge === '%' ? wallBetween(c, r, nc, nr) : null;
       const open = edgePassable(edge) || (edge === '%' && (!bw || bw.broken));
       if (!open && !(allowBreak && bw)) continue;
-      const cost = d + (open ? 1 : preferBreak ? 0.75 : 2.5);
+
+      let stepCost = open ? 1 : (preferWall ? 0.65 : 2.35);
       const nk = key(nc, nr);
+      if (!(nc === tc && nr === tr)) {
+        if (occupiedCells?.has(nk)) stepCost += 2.6;
+        if (avoidPos) {
+          const center = cabin.cellCenter(nc, nr);
+          const dx = center.x - avoidPos.x, dz = center.z - avoidPos.z;
+          const distToPlayer = Math.hypot(dx, dz) || 1;
+          const dot = (dx * fx + dz * fz) / distToPlayer;
+          if (isExposed && isExposed(center)) {
+            stepCost += dot > 0.35 && distToPlayer < 15 ? 9.5 : 5.5;
+          } else if (dot > 0.6 && distToPlayer < 6.5) {
+            stepCost += 3.0;
+          }
+        }
+      }
+
+      const cost = d + stepCost;
       if (cost < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, cost);
         parent.set(nk, [c, r]);

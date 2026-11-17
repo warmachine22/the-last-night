@@ -221,20 +221,63 @@ test('cooperative horde tactics flank outdoors, block cabin exits/breach walls i
   advance(run, 22, {});
   assert.ok(zList.some(z => z.dormant || z.reason === 'returning'), 'escaped zombies re-orient or return to dormant');
 
-  // 3) Indoor cabin tactics assign door blockers, wall breachers, and pushers
+  // 3) Indoor cabin tactics enforce 1-pusher token cap, corner/wall ambushes, and outdoor exit sealing
   const indoorRun = createRun('indoor-tactics', { populate: false });
   const cabin = indoorRun.world.cabins[0];
-  indoorRun.player.x = cabin.x;
-  indoorRun.player.z = cabin.z;
-  indoorRun.player.y = indoorRun.world.height(cabin.x, cabin.z);
-  const indoorZ = cabin.zombieSpots.slice(0, 6).map(spot => {
+  const entryDoor = cabin.doors[0];
+  indoorRun.player.x = entryDoor.x - (entryDoor.axis === 'h' ? 0 : entryDoor.dir * 1.4);
+  indoorRun.player.z = entryDoor.z - (entryDoor.axis === 'h' ? entryDoor.dir * 1.4 : 0);
+  indoorRun.player.y = indoorRun.world.height(indoorRun.player.x, indoorRun.player.z);
+
+  const indoorZ = cabin.zombieSpots.slice(0, 7).map(spot => {
     const z = addEnemy(indoorRun, 'shambler', spot.x, spot.z, { dormant: false, indoor: true, cabinId: cabin.id });
-    z.memory = { x: cabin.x, z: cabin.z, score: 2, reason: 'saw player', id: 'player', chase: true, until: 20 };
+    z.memory = { x: indoorRun.player.x, z: indoorRun.player.z, score: 2, reason: 'saw player', id: 'player', chase: true, until: 20 };
     z.target = z.memory;
     return z;
   });
+  const outdoorZ = [0, 1, 2].map(i => {
+    const z = addEnemy(indoorRun, 'shambler', cabin.x + cabin.w / 2 + 5 + i * 2, cabin.z + (i - 1) * 3, { dormant: false });
+    z.memory = { x: indoorRun.player.x, z: indoorRun.player.z, score: 2, reason: 'gunshot', id: 'gunshot', chase: true, until: 20 };
+    z.target = z.memory;
+    return z;
+  });
+
   advance(indoorRun, 0.5, {});
-  const indoorRoles = new Set(indoorZ.map(z => z.tactic?.role));
-  assert.ok(indoorRoles.has('doorBlocker') || indoorRoles.has('breacher'),
-    `expected cabin trap roles, got ${[...indoorRoles]}`);
+  const indoorRoles = indoorZ.map(z => z.tactic?.role);
+  const pusherCount = indoorRoles.filter(r => r === 'pusher').length;
+  assert.ok(pusherCount <= 2, `expected strict frontal pusher token cap (<=2), got ${pusherCount} in [${indoorRoles}]`);
+  assert.ok(indoorRoles.some(r => r === 'wallAmbusher' || r === 'cornerAmbush' || r === 'stealthFlanker'),
+    `expected off-axis indoor ambush/flank roles, got ${indoorRoles}`);
+  const outRoles = outdoorZ.map(z => z.tactic?.role);
+  assert.ok(outRoles.some(r => r === 'doorSealer'), `expected outdoor zombies to seal cabin exits, got ${outRoles}`);
+});
+
+test('entering a cabin and firing at the doorway does not pull all indoor zombies into a single-file rush', () => {
+  const run = createRun('doorway-rush-check', { populate: true });
+  const cabin = run.world.cabins[0];
+  const entryDoor = cabin.doors[0];
+  const inDirX = entryDoor.axis === 'h' ? 0 : -entryDoor.dir;
+  const inDirZ = entryDoor.axis === 'h' ? -entryDoor.dir : 0;
+
+  run.player.x = entryDoor.x + inDirX * 1.4;
+  run.player.z = entryDoor.z + inDirZ * 1.4;
+  run.player.y = run.world.height(run.player.x, run.player.z);
+  run.player.yaw = Math.atan2(inDirX, -inDirZ);
+  stepRun(run, {});
+
+  const cabinZombies = run.enemies.filter(e => !e.dead && e.cabinId === cabin.id);
+  assert.ok(cabinZombies.length >= 6, `expected populated cabin zombies, got ${cabinZombies.length}`);
+
+  // Shine flashlight & fire pistol inside the doorway, then simulate 6 seconds
+  const lamp = {
+    origin: { x: run.player.x, y: run.player.y + 1.5, z: run.player.z },
+    ray: { x: inDirX, y: 0, z: inDirZ },
+  };
+  stepRun(run, { lamp, fire: true, look: lamp.ray });
+  advance(run, 6.0, { lamp });
+
+  const aliveCabin = cabinZombies.filter(e => !e.dead);
+  const clusteredAtDoor = aliveCabin.filter(e => Math.hypot(e.x - entryDoor.x, e.z - entryDoor.z) < 3.6);
+  assert.ok(clusteredAtDoor.length <= 2,
+    `expected at most 2 zombies stacked at entrance after shooting, got ${clusteredAtDoor.length}`);
 });
