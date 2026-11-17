@@ -6,7 +6,7 @@ import {
   addEnemy, createRun, enemyPose, enemyVitalPoint, inspectFlashlights,
   inventorySnapshot, shoot, STEP, stepRun,
 } from '../src/simulation.js';
-import { animatedAnchors, VITAL_ZONES } from '../src/enemy-motion.js';
+import { VITAL_JOINTS } from '../src/enemy-motion.js';
 import { ANTENNA, CABIN_SITES, RADIO_PARTS } from '../src/map-layout.js';
 import { INDOOR_TARGET, OUTDOOR_TARGET, ROSTER_TARGET } from '../src/horde.js';
 
@@ -77,24 +77,30 @@ test('stealth: silent player in total darkness avoids detection and drops aggro 
   assert.equal(monster.dormant, true);
 });
 
-test('chasing monsters exceed player 2.72 m/s top speed', () => {
+test('chasing zombies stay between 1.5 and 2.5 mph (0.67-1.12 m/s max)', () => {
   const run = createRun('speed-seed', { populate: false });
   const shrieker = addEnemy(run, 'shrieker', run.player.x, run.player.z - 8, { dormant: false });
   shrieker.nextThink = 0;
   const lamp = { origin: { x: run.player.x, y: run.player.y + 1.4, z: run.player.z }, ray: { x: 0, y: 0, z: -1 } };
-  advance(run, 1.2, { lamp });
-  assert.ok(shrieker.moveSpeed > 2.72, `expected speed > 2.72 m/s, got ${shrieker.moveSpeed.toFixed(2)}`);
+  advance(run, 1.5, { lamp });
+  assert.ok(shrieker.moveSpeed >= 0.67 && shrieker.moveSpeed <= 1.121,
+    `expected speed in 0.67..1.12 m/s, got ${shrieker.moveSpeed.toFixed(2)}`);
 });
 
-test('two-step flashlight + randomized vital spot kill rule', () => {
-  const run = createRun('vital-seed', { populate: false });
+test('two-step flashlight + randomized skeletal joint instant-kill rule', () => {
+  const run = createRun('vital-seed', { populate: true });
+  const jointsSeen = new Set(run.roster.map(e => e.vitalJoint));
+  assert.ok(jointsSeen.size >= 12, `expected wide skeletal joint diversity, saw ${jointsSeen.size}`);
+  for (const j of jointsSeen) assert.ok(VITAL_JOINTS.includes(j));
+
+  // Test glitch-free hit on a knee joint (index 8) even while angled
   const monster = addEnemy(run, 'shambler', run.player.x, run.player.z - 5, {
     dormant: false,
-    vitalZone: 'leftLeg',
+    vitalJoint: 8,
   });
-  monster.yaw = 0;
+  monster.yaw = 0.6;
 
-  // 1) Shoot vital zone in total darkness -> invulnerable, deflects
+  // 1) Shoot vital joint in total darkness -> invulnerable, deflects
   run.player.flashlight = false;
   advance(run, 0.1, {});
   const pt = enemyVitalPoint(monster);
@@ -114,7 +120,7 @@ test('two-step flashlight + randomized vital spot kill rule', () => {
   assert.equal(monster.dead, false);
   assert.equal(run.metrics.deflects, 2);
 
-  // 3) Shoot the illuminated randomized vital zone (leftLeg) -> kills monster!
+  // 3) Shoot the illuminated randomized skeletal joint (8) -> instant kill!
   run.player.cooldown = 0;
   const litVital = enemyVitalPoint(monster);
   shoot(run, { origin: eye, ray: { x: litVital.x - eye.x, y: litVital.y - eye.y, z: litVital.z - eye.z } });

@@ -2,7 +2,7 @@ import { findCabinStep } from './cabins.js';
 import { DIFFICULTIES, difficultyKey } from './difficulty.js';
 import {
   animatedAnchors, attackContact, attackDirection, burstPhase, BURST_BRAKE, BURST_LOAD, BURST_RUN,
-  enemyMotion, HIT_SEGMENTS, hitRadii, strideLength, updateEnemyFooting, VITAL_KEYS, VITAL_ZONES,
+  enemyMotion, HIT_SEGMENTS, hitRadii, strideLength, updateEnemyFooting, VITAL_HIT_RADIUS, VITAL_JOINTS,
 } from './enemy-motion.js';
 import { collectPart, PARTS_REQUIRED, reachableAntenna } from './extraction.js';
 import { populateWorldRoster, syncActiveRoster } from './horde.js';
@@ -10,7 +10,7 @@ import { ANTENNA, CABIN_SITES, RADIO_PARTS } from './map-layout.js';
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '1.0.1';
+export const BUILD = '1.0.2';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [6, 12, 24, 50], reload: 1.5, interval: 0.31, range: 65, damage: 1.24, noise: 44, rounds: 1, spread: 0 },
@@ -20,10 +20,11 @@ export const GUNS = {
   flaregun: { name: 'Flare gun', capacities: [1, 1, 1, 1], reload: 1.35, interval: 0.42 },
 };
 
+// Zombie speeds in m/s: 1.5 mph (0.67 m/s) to 2.5 mph (1.12 m/s max).
 export const ENEMIES = {
-  shambler: { speed: 1.05, chaseSpeed: 2.88, height: 1.77, width: 0.28, hp: 3.2, windup: 0.56, reach: 1.19 },
-  shrieker: { speed: 1.48, chaseSpeed: 3.35, height: 1.66, width: 0.23, hp: 2.4, windup: 0.36, reach: 1.16 },
-  brute: { speed: 0.86, chaseSpeed: 2.62, height: 2.0, width: 0.36, hp: 5.9, windup: 0.78, reach: 1.35 },
+  shambler: { speed: 0.72, chaseSpeed: 0.90, height: 1.77, width: 0.28, hp: 3.2, windup: 0.60, reach: 1.19 },
+  shrieker: { speed: 0.88, chaseSpeed: 1.12, height: 1.66, width: 0.23, hp: 2.4, windup: 0.44, reach: 1.16 },
+  brute: { speed: 0.67, chaseSpeed: 0.78, height: 2.0, width: 0.36, hp: 5.9, windup: 0.82, reach: 1.35 },
 };
 
 export const UPGRADES = {
@@ -131,9 +132,7 @@ export function enemyPose(enemy) {
 
 export function enemyVitalPoint(enemy) {
   const points = animatedAnchors(enemy, ENEMIES[enemy.kind].windup);
-  const [a, b] = VITAL_ZONES[enemy.vitalZone]?.anchors || [2, 3];
-  const pa = points[a], pb = points[b];
-  return { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2, z: (pa.z + pb.z) / 2 };
+  return points[enemy.vitalJoint ?? 2];
 }
 
 function raySphere(origin, ray, center, radius) {
@@ -197,14 +196,22 @@ function traceRay(world, origin, ray, range, targets) {
   const limit = solid?.t ?? range;
   const hits = [];
   for (const { e, points, radii } of targets) {
-    let best = limit, zone = null, segZone = null;
-    for (const [i, [a, b, tag, region]] of HIT_SEGMENTS.entries()) {
-      const isVital = region === e.vitalZone;
-      const radius = tag === 'head' || isVital ? radii[i] * 1.25 + 0.014 : radii[i];
-      const t = rayCapsule(origin, ray, points[a], points[b], radius);
-      if (t < best) { best = t; zone = tag; segZone = region; }
+    // Check the lit vital joint sphere first so own arms/torso never block a clean shot at the red target.
+    if (e.revealed) {
+      const vp = points[e.vitalJoint ?? 2];
+      const tVital = raySphere(origin, ray, vp, VITAL_HIT_RADIUS);
+      if (tVital < limit) {
+        hits.push({ e, t: tVital, zone: 'vital', vitalHit: true, point: rayPoint(origin, ray, tVital) });
+        continue;
+      }
     }
-    if (zone) hits.push({ e, t: best, zone, segZone, point: rayPoint(origin, ray, best) });
+    let best = limit, zone = null;
+    for (const [i, [a, b, tag]] of HIT_SEGMENTS.entries()) {
+      const radius = tag === 'head' ? radii[i] * 1.18 : radii[i];
+      const t = rayCapsule(origin, ray, points[a], points[b], radius);
+      if (t < best) { best = t; zone = tag; }
+    }
+    if (zone) hits.push({ e, t: best, zone, vitalHit: false, point: rayPoint(origin, ray, best) });
   }
   hits.sort((a, b) => a.t - b.t);
   return { hits, cover: solid && { zone: 'cover', surface: solid.kind, point: rayPoint(origin, ray, solid.t) } };
@@ -223,8 +230,7 @@ export function traceAim(run, aim) {
   const { hits, cover } = traceRay(run.world, aim.origin, ray, range, prepareTargets(run, aim.origin, ray, range));
   if (!hits.length) return cover;
   const first = hits[0];
-  const hitVital = first.e.revealed && first.segZone === first.e.vitalZone;
-  return { ...first, zone: hitVital ? 'head' : 'armor' };
+  return { ...first, zone: first.vitalHit ? 'head' : 'armor' };
 }
 
 function emit(run, type, data = {}) {
@@ -309,12 +315,12 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
 }
 
 export function addEnemy(run, kind, x, z, meta = {}) {
-  const vitalZone = meta.vitalZone || VITAL_KEYS[Math.floor(run.rng() * VITAL_KEYS.length)];
+  const vitalJoint = meta.vitalJoint ?? VITAL_JOINTS[Math.floor(run.rng() * VITAL_JOINTS.length)];
   const enemy = {
     id: run.nextId++,
     kind,
     appearance: run.rng() < 0.5 ? kind : `${kind}-alt`,
-    vitalZone,
+    vitalJoint,
     revealed: false,
     revealGlow: 0,
     x,
@@ -508,7 +514,7 @@ export function shoot(run, aim) {
     for (let i = 0; i < Math.min(penetrates, candidates.length); i++) {
       const hit = candidates[i];
       const current = hits.get(hit.e) || { vitalHit: false, leg: false, point: hit.point };
-      if (hit.e.revealed && hit.segZone === hit.e.vitalZone) current.vitalHit = true;
+      if (hit.vitalHit) current.vitalHit = true;
       if (hit.zone === 'leg') current.leg = true;
       hits.set(hit.e, current);
     }
@@ -536,7 +542,7 @@ export function shoot(run, aim) {
       enemy.hitAge = 0;
       if (hit.leg) enemy.slow = 0.6;
       emit(run, 'impact', { ...hit.point, surface: 'armor' });
-      emit(run, 'deflect', { ...hit.point, revealed: enemy.revealed, vitalZone: enemy.vitalZone });
+      emit(run, 'deflect', { ...hit.point, revealed: enemy.revealed, vitalJoint: enemy.vitalJoint });
     }
   }
 }
@@ -908,7 +914,7 @@ function navigate(run, e, tx, tz, dt) {
   const progress = e.stumble > 0 ? 1 - e.stumble / e.stumbleDuration : 0;
   const stumblePace = progress > 0 ? 1 - 0.43 * Math.sin(Math.PI * progress) + 0.16 * Math.sin(2 * Math.PI * progress) : 1;
 
-  // Chasing monsters accelerate past the player's 2.72 m/s top speed
+  // Zombie chase speed stays between 1.5 and 2.5 mph (0.67-1.12 m/s) so the player can outrun them
   const baseChase = e.target?.chase ? Math.min(run.rules.speedLimit, cfg.chaseSpeed * run.rules.aggroScale) : cfg.speed;
   const speedTarget = (isBurst ? run.rules.speedLimit : baseChase * e.pace * stepPace * stumblePace)
     * (e.target ? 1 : 0.6) * (e.slow > 0 ? 0.58 : 1) * (e.stun > 0 ? 0.45 : 1) * (e.recover > 0.32 ? 0.35 : 1);
@@ -960,10 +966,12 @@ function updateEnemies(run, dt, lamps) {
       e.nextThink = time + (gap < 22 ? 0.18 : 0.42) + run.rng() * 0.08;
     }
 
-    // Check if the player's flashlight is illuminating this monster's vital region (or body while lit)
+    // Check if the player's flashlight is illuminating this monster
     const vitalPt = enemyVitalPoint(e);
     const torsoPt = eye(world, e, ENEMIES[e.kind].height * 0.58);
-    e.revealed = Boolean(lamps.length && lamps.some(lamp => inBeam(world, lamp, vitalPt) || inBeam(world, lamp, torsoPt)));
+    const headPt = eye(world, e, ENEMIES[e.kind].height * 0.88);
+    e.revealed = Boolean(lamps.length && lamps.some(lamp =>
+      inBeam(world, lamp, vitalPt) || inBeam(world, lamp, torsoPt) || inBeam(world, lamp, headPt)));
     e.revealGlow = clamp(e.revealGlow + (e.revealed ? dt * 9 : -dt * 5), 0, 1);
 
     e.stun = Math.max(0, e.stun - dt);

@@ -8,13 +8,9 @@ export const HIT_SEGMENTS = [
   [10, 11, 'arm', 'arm'], [11, 12, 'arm', 'arm'], [13, 14, 'leg', 'rightLeg'], [14, 15, 'leg', 'rightLeg'],
 ];
 
-export const VITAL_ZONES = {
-  head: { label: 'Brain', bone: 'Head', anchors: [0, 1], radius: .12 },
-  body: { label: 'Heart', bone: 'Spine', anchors: [2, 3], radius: .13 },
-  leftLeg: { label: 'Left Leg Heart', bone: 'ThighL', anchors: [7, 8], radius: .12 },
-  rightLeg: { label: 'Right Leg Heart', bone: 'ThighR', anchors: [13, 14], radius: .12 },
-};
-export const VITAL_KEYS = Object.keys(VITAL_ZONES);
+// All distinct skeletal joints (indices into rig.anchors 0..15) eligible for randomized vital weak points.
+export const VITAL_JOINTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+export const VITAL_HIT_RADIUS = 0.145;
 
 export function legacyEnemyMotion(enemy, windupSeconds) {
   const gait = (enemy.gait / (Math.PI * 2)) % 1;

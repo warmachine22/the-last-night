@@ -4,7 +4,8 @@ import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import { CHUNK, clamp, distance, hash, random } from './world.js';
 import { ENEMIES, flarePower, GUNS, isSupply, LOOT, signalFlarePower, STEP } from './simulation.js';
 import { legendaryBeamLabel, reloadMount } from './held-tools.js';
-import { burstPhase, interpolateEnemyTransform, legacyEnemyMotion, solvedEnemyPose, VITAL_ZONES } from './enemy-motion.js';
+import { burstPhase, interpolateEnemyTransform, legacyEnemyMotion, solvedEnemyPose } from './enemy-motion.js';
+import { ENEMY_RIGS } from './enemy-rigs.js';
 import { ANTENNA } from './map-layout.js';
 import { beamTexture, createCanopyLighting, moonDirection } from './night-lighting.js';
 import { bake, grassGeometry, kit, shrubGeometry } from './kit.js';
@@ -843,22 +844,19 @@ export function createPresentation(scene, art, layouts) {
     const vitalMat = new THREE.MeshBasicMaterial({
       color: 0xe62018, transparent: true, opacity: 0, depthTest: false, toneMapped: false,
     });
-    const vitalCore = new THREE.Mesh(new THREE.SphereGeometry(0.052, 12, 10), vitalMat);
+    const vitalCore = new THREE.Mesh(new THREE.SphereGeometry(0.063, 12, 10), vitalMat);
     vitalCore.renderOrder = 20;
     const vitalHalo = new THREE.Sprite(new THREE.SpriteMaterial({
       map: glow, color: 0xff2c1a, opacity: 0, transparent: true,
       depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending, toneMapped: false,
     }));
     vitalHalo.renderOrder = 21;
-    vitalHalo.scale.setScalar(0.15);
+    vitalHalo.scale.setScalar(0.18);
     const vitalGroup = new THREE.Group();
     vitalGroup.add(vitalCore, vitalHalo);
     vitalGroup.visible = false;
-    const vitalBones = Object.fromEntries(
-      Object.entries(VITAL_ZONES).map(([zone, cfg]) => [zone, character.getObjectByName(cfg.bone) || character]),
-    );
     return { root, character, bones, targets, mixer, model, actions, deadAt: -1, age: 0,
-      vitalGroup, vitalCore, vitalHalo, vitalBones, vitalAttached: null };
+      vitalGroup, vitalCore, vitalHalo, vitalAttached: null };
   }
 
   function releaseEnemy(v) {
@@ -880,25 +878,23 @@ export function createPresentation(scene, art, layouts) {
       if (!v) { v = borrowEnemy(e.kind, e.appearance ?? e.kind); enemyMeshes.set(e.id, v); }
       const d = distance(e, run.player), dead = e.diedAt !== undefined;
       v.root.rotation.y = -interpolateEnemyTransform(e, alpha, v.root.position);
-      if (v.vitalAttached !== e.vitalZone) {
-        v.vitalAttached = e.vitalZone;
-        const targetBone = v.vitalBones[e.vitalZone] || v.character;
+      if (v.vitalAttached !== e.vitalJoint) {
+        v.vitalAttached = e.vitalJoint;
+        const anchor = ENEMY_RIGS[e.kind]?.anchors[e.vitalJoint ?? 2];
+        const targetBone = (anchor && v.bones?.[anchor[0]]) || v.character;
         targetBone.add(v.vitalGroup);
-        v.vitalGroup.position.set(
-          0,
-          e.vitalZone === 'body' ? 0.15 : e.vitalZone === 'head' ? 0.10 : -0.18,
-          e.vitalZone === 'head' || e.vitalZone === 'body' ? 0.025 : 0,
-        );
+        if (anchor) v.vitalGroup.position.set(anchor[1], anchor[2], anchor[3]);
+        else v.vitalGroup.position.set(0, 1.2, 0);
       }
       const glowLevel = dead ? 0 : (e.revealGlow || 0);
       v.vitalGroup.visible = glowLevel > 0.02;
       if (v.vitalGroup.visible) {
         const pulse = 1 + 0.1 * Math.sin(run.time * 10 + e.id);
         const s = (0.85 + 0.15 * glowLevel) * pulse;
-        v.vitalCore.scale.set(0.92 * s, 1.22 * s, 0.85 * s);
-        v.vitalCore.material.opacity = glowLevel * 0.74;
-        v.vitalHalo.material.opacity = glowLevel * 0.28;
-        v.vitalHalo.scale.setScalar(0.15 * pulse);
+        v.vitalCore.scale.set(0.95 * s, 1.18 * s, 0.90 * s);
+        v.vitalCore.material.opacity = glowLevel * 0.78;
+        v.vitalHalo.material.opacity = glowLevel * 0.30;
+        v.vitalHalo.scale.setScalar(0.18 * pulse);
       }
       if (dead && !v.bones) {
         const time = run.time - e.diedAt, rate = e.kind === 'brute' ? 1.2 : e.kind === 'shrieker' ? 2.05 : 1.48;
