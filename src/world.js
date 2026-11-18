@@ -1,6 +1,6 @@
 import { createLabyrinth, LABYRINTH_CELL, LABYRINTH_DOOR_HEIGHT, LABYRINTH_HEIGHT, LABYRINTH_JAMB } from './labyrinth.js';
 
-export const CHUNK = 48;
+export const CHUNK = 24;
 export const START = { x: 0, z: 0 };
 
 export const clamp = (value, min, max) => Math.min(max, Math.max(min, value));

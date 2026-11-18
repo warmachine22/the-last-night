@@ -1,7 +1,8 @@
 import { distance } from './world.js';
 
-export const WAKE_RADIUS = 26;
-export const SLEEP_RADIUS = 34;
+export const WAKE_RADIUS = 24;
+export const SLEEP_RADIUS = 30;
+export const MAX_ACTIVE_ZOMBIES = 18;
 
 // Populate every predetermined room (1-5 zombies) and hallway roamer from the labyrinth blueprint.
 export function populateWorldRoster(run, createMonster) {
@@ -23,15 +24,15 @@ export function populateWorldRoster(run, createMonster) {
   syncActiveRoster(run);
 }
 
-// Stream and simulate only zombies closest to the player; distant zombies sleep cleanly in place.
+// Stream and simulate only the closest active zombies around the player; distant zombies sleep cleanly in place.
 export function syncActiveRoster(run) {
   const p = run.player;
-  const active = [];
+  const candidates = [];
   for (const e of run.roster) {
     if (e.dead) continue;
     const d = distance(e, p);
     if (d <= WAKE_RADIUS || (!e.dormant && d <= SLEEP_RADIUS)) {
-      active.push(e);
+      candidates.push({ e, d });
     } else {
       e.dormant = true;
       e.alerted = false;
@@ -40,5 +41,17 @@ export function syncActiveRoster(run) {
       e.reason = 'dormant';
     }
   }
-  run.enemies = active;
+  if (candidates.length > MAX_ACTIVE_ZOMBIES) {
+    candidates.sort((a, b) => a.d - b.d);
+    for (let i = MAX_ACTIVE_ZOMBIES; i < candidates.length; i++) {
+      const e = candidates[i].e;
+      e.dormant = true;
+      e.alerted = false;
+      e.target = null;
+      e.memory = null;
+      e.reason = 'dormant';
+    }
+    candidates.length = MAX_ACTIVE_ZOMBIES;
+  }
+  run.enemies = candidates.map(c => c.e);
 }

@@ -32,7 +32,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.07;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
 renderer.xr.setFramebufferScaleFactor(0.91);
@@ -46,6 +46,7 @@ const art = await loadArt(false);
 const layouts = toolLayouts(art);
 const presentation = createPresentation(scene, art, layouts);
 const handling = createGunHandling();
+try { renderer.compile(scene, camera); } catch {}
 $('start').disabled = false;
 $('start').textContent = touch ? 'Start on this screen' : 'Enter the Labyrinth';
 $('build').textContent = 'BUILD ' + BUILD;
@@ -700,7 +701,7 @@ function measure(wall, stereo) {
 }
 
 function simulate(t, sample, stereo) {
-  accumulator = Math.min(0.22, accumulator + t);
+  accumulator = Math.min(0.11, accumulator + t);
   while (accumulator + 1e-9 >= STEP && phase === 'playing') {
     accumulator -= STEP;
     const state = stereo ? {

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { addEnemy, BUILD, createRun, ENEMIES, enemyPose, GUNS, shoot, STEP, stepRun, UPGRADES } from '../src/simulation.js';
 import { DIFFICULTIES } from '../src/difficulty.js';
 import { createLabyrinth, LABYRINTH_CELL, LABYRINTH_HEIGHT } from '../src/labyrinth.js';
+import { CHUNK } from '../src/world.js';
+import { MAX_ACTIVE_ZOMBIES } from '../src/horde.js';
 
 function advance(run, seconds, input = {}) {
   const steps = Math.round(seconds / STEP);
@@ -12,9 +14,14 @@ function advance(run, seconds, input = {}) {
 }
 
 test('all three difficulty maze sizes (78m, 114m, 156m) have high ceilings, mix of tight and big spaces, and one exit', () => {
-  assert.equal(BUILD, '2.2.0');
+  assert.equal(BUILD, '2.2.1');
+  assert.equal(CHUNK, 24);
+  assert.equal(MAX_ACTIVE_ZOMBIES, 18);
   assert.ok(LABYRINTH_HEIGHT >= 4.0, `ceiling height should be tall (>=4.0m), got ${LABYRINTH_HEIGHT}`);
   assert.ok(LABYRINTH_CELL >= 3.0, `cell width should be wider (>=3.0m), got ${LABYRINTH_CELL}`);
+
+  const fullRun = createRun('perf-cap', { difficulty: 'nightmare', populate: true });
+  assert.ok(fullRun.enemies.length <= MAX_ACTIVE_ZOMBIES, `active zombies must cap at ${MAX_ACTIVE_ZOMBIES}`);
 
   for (const [key, spec] of Object.entries(DIFFICULTIES)) {
     const lab = createLabyrinth('seed-' + key, spec.mazeSize, spec.ammoScale);

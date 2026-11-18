@@ -22,21 +22,27 @@ function image(name) {
   const tex = textures.load(new URL('./assets/art/' + name + '.webp', import.meta.url).href);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.anisotropy = 3;
+  tex.anisotropy = 2;
   return tex;
 }
 
+const stoneTex = image('stone');
+const floorStoneTex = stoneTex.clone();
+floorStoneTex.repeat.set(8, 8);
+floorStoneTex.needsUpdate = true;
+const wallStoneTex = stoneTex.clone();
+wallStoneTex.repeat.set(2, 1.4);
+wallStoneTex.needsUpdate = true;
+
 const surfaces = {
-  floor: new THREE.MeshStandardMaterial({ map: image('stone'), color: 0x4b4e50, roughness: 0.94 }),
-  wall: new THREE.MeshStandardMaterial({ map: image('stone'), color: 0x626569, roughness: 0.92 }),
-  ceiling: new THREE.MeshStandardMaterial({ map: image('stone'), color: 0x2f3236, roughness: 0.96 }),
-  pebbles: new THREE.MeshStandardMaterial({ map: image('stone'), color: 0x8d887e, roughness: 0.95, flatShading: true }),
+  floor: new THREE.MeshStandardMaterial({ map: floorStoneTex, color: 0x4b4e50, roughness: 0.94 }),
+  wall: new THREE.MeshStandardMaterial({ map: wallStoneTex, color: 0x626569, roughness: 0.92 }),
+  ceiling: new THREE.MeshStandardMaterial({ map: stoneTex, color: 0x2f3236, roughness: 0.96 }),
+  pebbles: new THREE.MeshStandardMaterial({ map: stoneTex, color: 0x8d887e, roughness: 0.95, flatShading: true }),
   branches: new THREE.MeshStandardMaterial({ map: image('bark'), color: 0x6f553b, roughness: 0.96 }),
   puddles: new THREE.MeshStandardMaterial({ color: 0x1c2f3f, roughness: 0.14, metalness: 0.42 }),
   exitFrame: new THREE.MeshStandardMaterial({ color: 0x3b2220, roughness: 0.85 }),
 };
-surfaces.floor.map.repeat.set(16, 16);
-surfaces.wall.map.repeat.set(2, 1.4);
 
 const enemyModels = Object.keys(ENEMIES).flatMap(kind => [kind, kind + '-alt']);
 const modelNames = [...Object.keys(GUNS), 'flashlight', 'glove', ...enemyModels];
@@ -153,11 +159,12 @@ function makeChunk(area, exitTex) {
     group.add(floor);
   }
 
-  // 2) Enclosing Ceilings
-  const ceilMesh = instance(group, baseBox, surfaces.ceiling, area.ceilings.length, false, true);
+  // 2) Enclosing Ceilings (no shadow receiving on ceiling saves mobile fragment work)
+  const ceilMesh = instance(group, baseBox, surfaces.ceiling, area.ceilings.length, false, false);
   for (const [i, c] of area.ceilings.entries()) {
     place(ceilMesh, i, c.x, LABYRINTH_HEIGHT + 0.05, c.z, c.bw + 0.15, 0.1, c.bd + 0.15, 0);
   }
+  ceilMesh?.computeBoundingSphere();
 
   // 3) Walls & Doorway Lintels
   const wallMesh = instance(group, baseBox, surfaces.wall, area.colliders.length, true, true);
@@ -166,6 +173,7 @@ function makeChunk(area, exitTex) {
     const tint = new THREE.Color(w.tint ?? 0x626569).multiplyScalar(shade);
     place(wallMesh, i, w.x, w.y + w.height / 2, w.z, w.rx * 2, w.height, w.rz * 2, 0, tint);
   }
+  wallMesh?.computeBoundingSphere();
 
   // 4) Ground Sound Hazards (pebbles, dry branches, puddles)
   const pebList = area.hazards.filter(h => h.kind === 'pebbles');
@@ -173,7 +181,7 @@ function makeChunk(area, exitTex) {
   const puddleList = area.hazards.filter(h => h.kind === 'puddles');
 
   if (pebList.length) {
-    const pebbles = instance(group, pebbleGeo, surfaces.pebbles, pebList.length * 5, false, true);
+    const pebbles = instance(group, pebbleGeo, surfaces.pebbles, pebList.length * 5, false, false);
     let idx = 0;
     for (const h of pebList) {
       for (let j = 0; j < 5; j++) {
@@ -185,10 +193,11 @@ function makeChunk(area, exitTex) {
           sc, sc * 0.58, sc * 1.15, a, new THREE.Color(tone, tone * 0.96, tone * 0.92));
       }
     }
+    pebbles?.computeBoundingSphere();
   }
 
   if (branchList.length) {
-    const branches = instance(group, stickGeo, surfaces.branches, branchList.length * 3, false, true);
+    const branches = instance(group, stickGeo, surfaces.branches, branchList.length * 3, false, false);
     let idx = 0;
     for (const h of branchList) {
       for (let j = 0; j < 3; j++) {
@@ -199,6 +208,7 @@ function makeChunk(area, exitTex) {
           new THREE.Color(0.85, 0.78, 0.68), Math.PI / 2);
       }
     }
+    branches?.computeBoundingSphere();
   }
 
   if (puddleList.length) {
@@ -206,9 +216,10 @@ function makeChunk(area, exitTex) {
     for (const [i, h] of puddleList.entries()) {
       place(puddles, i, h.x, 0.008, h.z, h.r * 0.95, 1, h.r * 0.78, h.turn);
     }
+    puddles?.computeBoundingSphere();
   }
 
-  // 5) Single Perimeter Exit Door + Dim Red Exit Plaque (only visible inside Exit Chamber)
+  // 5) Single Perimeter Exit Door + Dim Red Exit Plaque (lit by persistent shared exitLight)
   if (area.exit) {
     const ex = area.exit;
     const panel = new THREE.Mesh(baseBox, surfaces.exitFrame);
@@ -223,10 +234,6 @@ function makeChunk(area, exitTex) {
     sign.position.set(ex.doorX - ex.nx * 0.18, LABYRINTH_DOOR_HEIGHT + 0.28, ex.doorZ - ex.nz * 0.18);
     sign.rotation.y = Math.atan2(-ex.nx, -ex.nz);
     group.add(sign);
-
-    const exitLight = new THREE.PointLight(0xff2c22, 2.1, 5.2, 2);
-    exitLight.position.set(ex.doorX - ex.nx * 0.45, LABYRINTH_DOOR_HEIGHT + 0.15, ex.doorZ - ex.nz * 0.45);
-    group.add(exitLight);
   }
 
   return group;
@@ -242,17 +249,15 @@ export function createPresentation(scene, art, layouts) {
   const flashPattern = beamTexture(true);
   const lamp = makeLamp();
 
-  // Single bright shadow-casting muzzle flash SpotLight + synchronized room bounce PointLight
+  // Single unshadowed muzzle flash SpotLight + synchronized room bounce & persistent exit PointLight
+  // Keeping only `lamp` shadow-casting eliminates dual shadow passes and light-count shader recompiles.
   const muzzle = new THREE.SpotLight(0xffcb8c, 0, 22, 1.05, 0.72, 1.35);
   muzzle.map = flashPattern;
-  muzzle.castShadow = true;
-  muzzle.shadow.autoUpdate = false;
-  muzzle.shadow.mapSize.set(256, 256);
-  muzzle.shadow.camera.near = 0.08;
-  muzzle.shadow.bias = -0.002;
+  muzzle.castShadow = false;
 
   const muzzleBounce = new THREE.PointLight(0xffb470, 0, 12.5, 1.45);
-  scene.add(lamp, lamp.target, muzzle, muzzle.target, muzzleBounce);
+  const exitLight = new THREE.PointLight(0xff2c22, 0, 5.2, 2);
+  scene.add(lamp, lamp.target, muzzle, muzzle.target, muzzleBounce, exitLight);
 
   const dot = new THREE.Mesh(new THREE.SphereGeometry(0.012, 9, 6),
     new THREE.MeshBasicMaterial({ color: 0xf54a36, toneMapped: false, fog: false }));
@@ -347,9 +352,16 @@ export function createPresentation(scene, art, layouts) {
   let tick = 0;
   let currentRun = null;
   let artworkLit = null;
+  let lastChunkKey = '';
+  let pendingChunks = false;
+  let shadowDirty = true;
+  const lastLamp = { ox: 0, oy: 0, oz: 0, rx: 0, ry: 0, rz: 0, active: false, mode: '' };
 
   function reset(run) {
     currentRun = run;
+    lastChunkKey = '';
+    pendingChunks = true;
+    shadowDirty = true;
     for (const group of chunks.values()) discardChunk(group);
     chunks.clear();
     for (const visual of enemyMeshes.values()) releaseEnemy(visual);
@@ -358,6 +370,9 @@ export function createPresentation(scene, art, layouts) {
     pickups.clear();
     for (const effect of effects.splice(0)) { effect.mesh.visible = false; impactPool.push(effect.mesh); }
     flashState.shot = null;
+    const ex = run.world.exit;
+    exitLight.position.set(ex.doorX - ex.nx * 0.45, LABYRINTH_DOOR_HEIGHT + 0.15, ex.doorZ - ex.nz * 0.45);
+    exitLight.intensity = 0;
   }
 
   function discardChunk(group) {
@@ -370,6 +385,10 @@ export function createPresentation(scene, art, layouts) {
 
   function updateChunks(world, p) {
     const cx = Math.floor(p.x / CHUNK), cz = Math.floor(p.z / CHUNK);
+    const keyNow = `${cx},${cz}`;
+    if (keyNow === lastChunkKey && !pendingChunks) return;
+    lastChunkKey = keyNow;
+
     const wanted = new Map();
     for (let z = cz - 1; z <= cz + 1; z++) {
       for (let x = cx - 1; x <= cx + 1; x++) {
@@ -377,17 +396,21 @@ export function createPresentation(scene, art, layouts) {
         wanted.set(key, { x, z, key, d: Math.hypot((x + 0.5) * CHUNK - p.x, (z + 0.5) * CHUNK - p.z) });
       }
     }
+    let changed = false;
     for (const [key, view] of chunks) {
-      if (!wanted.has(key)) { discardChunk(view); chunks.delete(key); }
+      if (!wanted.has(key)) { discardChunk(view); chunks.delete(key); changed = true; }
     }
     const missing = [...wanted.values()].filter(w => !chunks.has(w.key)).sort((a, b) => a.d - b.d);
-    const limit = chunks.size > 0 ? 1 : missing.length;
+    const limit = chunks.size === 0 ? Math.min(4, missing.length) : 1;
     for (const w of missing.slice(0, limit)) {
       const area = world.chunk(w.x, w.z);
       const view = makeChunk(area, exitTex);
       scene.add(view);
       chunks.set(w.key, view);
+      changed = true;
     }
+    pendingChunks = missing.length > limit;
+    if (changed) shadowDirty = true;
   }
 
   function borrowEnemy(kind, appearance) {
@@ -436,7 +459,7 @@ export function createPresentation(scene, art, layouts) {
     const desired = new Set();
     const corpses = run.corpses.filter(e => run.time - e.diedAt < 8).slice(-8);
     for (const e of [...run.enemies, ...corpses]) {
-      if (distance(e, run.player) > 42) continue;
+      if (distance(e, run.player) > 28) continue;
       desired.add(e.id);
       let v = enemyMeshes.get(e.id);
       if (!v) { v = borrowEnemy(e.kind, e.appearance ?? e.kind); enemyMeshes.set(e.id, v); }
@@ -501,17 +524,22 @@ export function createPresentation(scene, art, layouts) {
     view.icon.material.dispose();
   }
 
-  function coneReaches(world, from, ray, target, range, angle) {
-    const delta = target.clone().sub(from);
-    const d = delta.length(), along = delta.dot(ray);
-    if (d > range || along <= Math.cos(angle) * d) return false;
-    return world.clear(from, target);
+  const lootSpot = v3(0, 0, 0);
+  function coneReaches(world, from, ray, tx, ty, tz, range, cosAngle) {
+    const dx = tx - from.x, dy = ty - from.y, dz = tz - from.z;
+    const d = Math.hypot(dx, dy, dz);
+    if (d > range) return false;
+    const along = dx * ray.x + dy * ray.y + dz * ray.z;
+    if (along <= cosAngle * d) return false;
+    lootSpot.set(tx, ty, tz);
+    return world.clear(from, lootSpot);
   }
 
   function updateLoot(run, beam, flashLitIntensity) {
     const desired = new Set();
     const p = run.player;
     const flashBoost = flashLitIntensity > 0 ? clamp(flashLitIntensity / 3.5, 0, 1) : 0;
+    const cosAngle = beam ? Math.cos(beam.angle) : 1;
     for (const item of run.loot) {
       const d = distance(item, p);
       if (item.lost || d > 22) continue;
@@ -529,8 +557,7 @@ export function createPresentation(scene, art, layouts) {
         pickups.set(item.id, view);
       }
       const distFade = clamp((18 - d) / 6, 0, 1);
-      const spot = v3(item.x, item.y + 0.4, item.z);
-      const beamLit = beam && coneReaches(run.world, beam.origin, beam.ray, spot, beam.range, beam.angle);
+      const beamLit = beam && coneReaches(run.world, beam.origin, beam.ray, item.x, item.y + 0.4, item.z, beam.range, cosAngle);
       const strength = Math.max(d < 1.8 ? 0.42 : 0, beamLit ? 0.85 : 0, flashBoost * (d < 12 ? 0.92 : 0)) * distFade;
       view.icon.visible = strength > 0.02;
       view.icon.material.opacity = strength;
@@ -623,13 +650,25 @@ export function createPresentation(scene, art, layouts) {
   }
 
   function updateLamp(light, beam, power) {
-    if (!beam) { light.intensity = 0; return; }
-    light.position.set(beam.origin.x, beam.origin.y, beam.origin.z);
-    light.target.position.copy(light.position).add(v3(beam.ray.x, beam.ray.y, beam.ray.z));
-    light.shadow.needsUpdate = true;
+    if (!beam) { light.intensity = 0; lastLamp.active = false; return; }
+    const ox = beam.origin.x, oy = beam.origin.y, oz = beam.origin.z;
+    const rx = beam.ray.x, ry = beam.ray.y, rz = beam.ray.z;
+    light.position.set(ox, oy, oz);
+    light.target.position.set(ox + rx, oy + ry, oz + rz);
     light.angle = beam.angle;
     light.distance = beam.range;
     light.intensity = (beam.mode === 'focus' ? 460 : 300) * power;
+    const moved = !lastLamp.active || lastLamp.mode !== beam.mode || shadowDirty
+      || Math.abs(ox - lastLamp.ox) + Math.abs(oy - lastLamp.oy) + Math.abs(oz - lastLamp.oz) > 0.015
+      || Math.abs(rx - lastLamp.rx) + Math.abs(ry - lastLamp.ry) + Math.abs(rz - lastLamp.rz) > 0.008;
+    if (moved && (quality > 1 || tick % 2 === 0)) {
+      light.shadow.needsUpdate = true;
+      shadowDirty = false;
+      lastLamp.ox = ox; lastLamp.oy = oy; lastLamp.oz = oz;
+      lastLamp.rx = rx; lastLamp.ry = ry; lastLamp.rz = rz;
+      lastLamp.active = true;
+      lastLamp.mode = beam.mode;
+    }
   }
 
   function updateFlash(flash, world, dt, settings, active) {
@@ -696,6 +735,9 @@ export function createPresentation(scene, art, layouts) {
       attackerMarker.scale.set(width, width / 4, 1);
     }
 
+    const ex = run.world.exit;
+    exitLight.intensity = !menu && Math.hypot(p.x - ex.doorX, p.z - ex.doorZ) < 28 ? 2.1 : 0;
+
     const ambiance = menu ? 'menu' : settings.visibility ? 'bright' : 'dark';
     if (tone !== ambiance) {
       tone = ambiance;
@@ -714,11 +756,24 @@ export function createPresentation(scene, art, layouts) {
     }
   }
 
+  for (const name of enemyModels) {
+    releaseEnemy(borrowEnemy(name.replace('-alt', ''), name));
+  }
+
   return {
     update,
     events,
     state: presentationState,
-    setQuality(value) { quality = value; },
+    setQuality(value) {
+      quality = value;
+      const size = value >= 3 ? 512 : value === 2 ? 384 : 256;
+      if (lamp.shadow.mapSize.x !== size) {
+        lamp.shadow.map?.dispose();
+        lamp.shadow.map = null;
+        lamp.shadow.mapSize.set(size, size);
+        shadowDirty = true;
+      }
+    },
     streamingStats() { return { chunks: chunks.size }; },
   };
 }
