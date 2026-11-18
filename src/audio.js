@@ -331,6 +331,7 @@ export function createAudio() {
         const gain = e.weapon === 'shotgun' ? .81 : e.weapon === 'carbine' ? .72 : .59;
         play(buffers.has(e.weapon) ? e.weapon : 'fallback', { bus: weapons, gain,
           speed: .94 + Math.random() * .13 });
+        if (e.weapon === 'flaregun') play('flare', { bus: effects, gain: .28 });
       } else if (e.type === 'reload') {
         play(e.weapon === 'smg' || e.weapon === 'carbine' ? 'reload-smg-short' : e.weapon === 'shotgun' ? 'pump' : 'reload-short',
           { bus: weapons, gain: .35 });

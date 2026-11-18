@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addEnemy, BUILD, createRun, ENEMIES, enemyPose, GUNS, resolvePlayerBeam, shoot, STEP, stepRun, UPGRADES } from '../src/simulation.js';
+import {
+  addEnemy, beamSettings, BUILD, createRun, ENEMIES, enemyPose, FLARE_MAX_ACTIVE, GUNS, resolvePlayerBeam, setLoot, shoot, STEP, stepRun, UPGRADES,
+} from '../src/simulation.js';
 import { ARENA_SIZES, DIFFICULTIES } from '../src/difficulty.js';
 import { createLabyrinth, LABYRINTH_CELL, LABYRINTH_HEIGHT } from '../src/labyrinth.js';
 import { ARENA_HEIGHT } from '../src/arena.js';
@@ -15,7 +17,7 @@ function advance(run, seconds, input = {}) {
 }
 
 test('all three difficulty maze sizes (78m, 114m, 156m) have high ceilings, mix of tight and big spaces, and one exit', () => {
-  assert.equal(BUILD, '2.4.3');
+  assert.equal(BUILD, '2.5.0');
   assert.equal(CHUNK, 24);
   assert.equal(MAX_ACTIVE_ZOMBIES, 18);
   assert.ok(LABYRINTH_HEIGHT >= 4.0, `ceiling height should be tall (>=4.0m), got ${LABYRINTH_HEIGHT}`);
@@ -59,13 +61,13 @@ test('infinite brighter narrow-cone flashlight works, dry-fire sparks, spray can
   const flRun = createRun('fl-mode', { populate: false, difficulty: 'standard' });
   assert.equal('spraycan' in flRun.player.magazines, false);
   assert.equal(flRun.player.flashlight, true);
-  assert.equal(flRun.player.beam, 'focus');
+  assert.equal(flRun.player.beam, 'wide');
   const lamp = { origin: { x: flRun.player.x, y: flRun.player.y + 1.4, z: flRun.player.z }, ray: { x: 0, y: 0, z: -1 } };
   advance(flRun, 40, { lamp });
   assert.equal(flRun.player.battery, 1, 'flashlight must never run out of charge');
   assert.equal(flRun.player.flashlight, true);
-  const focusBeam = resolvePlayerBeam(flRun, lamp, { x: flRun.player.x, y: flRun.player.y + 1.63, z: flRun.player.z });
-  assert.ok(focusBeam.range >= 32 && focusBeam.angle <= 0.25 && focusBeam.powerScale > 1.1);
+  const wideBeam = resolvePlayerBeam(flRun, lamp, { x: flRun.player.x, y: flRun.player.y + 1.63, z: flRun.player.z });
+  assert.ok(wideBeam.range === 15 && wideBeam.angle === 0.49 && wideBeam.powerScale === 1);
 
   flRun.player.ammo = 0;
   flRun.player.reserve = 0;
@@ -208,10 +210,10 @@ test('Fight in Tight Space mode builds a 6-sided 6-door arena with connected pat
       assert.equal(arena.allZonesConnected(blockedSet, pTile, reqTiles), true, `${sizeKey} shift ${s} partitioned arena!`);
     }
 
-    // One standard bright infinite narrow beam across modes (no flashlight upgrade)
+    // Restored original infinite beam across modes (no flashlight upgrade)
     const lampAim = { origin: { x: 0, y: 1.4, z: 0 }, ray: { x: 0, y: 0, z: -1 } };
     const arenaBeam = resolvePlayerBeam(arenaRun, lampAim, { x: 0, y: 1.63, z: 0 });
-    assert.ok(arenaBeam.range >= 32 && arenaBeam.angle <= 0.25 && arenaBeam.powerScale >= 1.2);
+    assert.ok(arenaBeam.range === 15 && arenaBeam.angle === 0.49 && arenaBeam.powerScale === 1);
     assert.equal('light' in UPGRADES, false);
     assert.ok(arenaRun.player.reserve >= 50, 'arena should start with generous reserve ammo');
   }
@@ -302,4 +304,51 @@ test('Fight in Tight Space mode builds a 6-sided 6-door arena with connected pat
   assert.ok(run.loot.filter(l => l.kind === 'ammo').length >= 3, 'multiple generous ammo pickups should spawn between waves');
   assert.ok(run.loot.some(l => l.kind in UPGRADES), 'gun upgrades should spawn between waves');
   assert.ok(run.loot.some(l => l.kind === 'shotgun'));
+});
+
+test('original flashlight cone, headshot kill event, non-attracting 3-flare cap & separate flare ammo', () => {
+  const run = createRun('flare-and-headshot', { difficulty: 'standard', populate: false });
+  assert.equal(run.player.beam, 'wide');
+  assert.deepEqual(beamSettings('wide'), { range: 15, angle: 0.49, powerScale: 1 });
+  assert.deepEqual(beamSettings('focus'), { range: 22, angle: 0.25, powerScale: 1 });
+  assert.equal(FLARE_MAX_ACTIVE, 3);
+
+  // Switch to flaregun with flashlight off: fire 4 flares -> capped at 3 burning, zero zombie noise/alert
+  const otherRoom = run.world.labyrinth.zones.find(z => z.distFromStart >= 2);
+  const zombie = addEnemy(run, 'shambler', otherRoom.center.x, otherRoom.center.z, { dormant: true, zoneId: otherRoom.id });
+  run.player.flashlight = false;
+  run.player.weapon = 'flaregun';
+  const reserveBefore = run.player.reserve;
+  for (let s = 0; s < 4; s++) {
+    advance(run, GUNS.flaregun.reload + GUNS.flaregun.interval + 0.1, {});
+    stepRun(run, {
+      fire: true,
+      aim: { origin: { x: run.player.x, y: run.player.y + 1.4, z: run.player.z }, ray: { x: 0, y: 0.15, z: -1 } },
+    }, STEP);
+  }
+  assert.equal(run.signalFlares.length, 3, 'at most 3 signal flares may burn simultaneously');
+  assert.equal(run.noises.length, 0, 'flare gun must not emit zombie-attracting noise');
+  assert.equal(zombie.dormant, true, 'flares must not wake/attract nearby dormant zombies');
+  assert.equal(run.player.reserve, reserveBefore, 'flare shots must not consume regular firearm reserve ammo');
+  assert.ok(run.player.flares < 6, 'flare reload draws from separate flare reserve');
+
+  // Verify separate flareAmmo pickup increments flares only
+  const flaresBefore = run.player.flares;
+  setLoot(run, 'flareAmmo', run.player.x, run.player.z, 'test:flares', 3);
+  advance(run, 0.08, {});
+  assert.equal(run.player.flares, flaresBefore + 3);
+  assert.equal(run.player.reserve, reserveBefore);
+
+  // Switch back to pistol and land a headshot kill -> emits impact { head: true, kill: true } and corpse.headshot === true
+  const target = addEnemy(run, 'shambler', run.player.x, run.player.z - 2.1, { dormant: true });
+  run.player.weapon = 'pistol';
+  run.player.reload = null;
+  run.player.cooldown = 0;
+  const pose = enemyPose(target);
+  const o = { x: run.player.x, y: run.player.y + 1.4, z: run.player.z };
+  const dx = pose.head.x - o.x, dy = pose.head.y - o.y, dz = pose.head.z - o.z;
+  const d = Math.hypot(dx, dy, dz);
+  const ev = stepRun(run, { fire: true, aim: { origin: o, ray: { x: dx / d, y: dy / d, z: dz / d } } }, STEP);
+  assert.ok(ev.some(e => e.type === 'impact' && e.head && e.kill), 'headshot kill must emit impact with head & kill flags');
+  assert.equal(run.corpses.at(-1)?.headshot, true, 'corpse record must mark headshot kill for head explosion');
 });

@@ -37,7 +37,7 @@ export function drawFieldMapAndInventory(ctx, width, height, run, hint = '', sec
   y += 12;
   ctx.fillStyle = '#d8dfd0';
   ctx.font = 'bold 22px monospace';
-  ctx.fillText(`RESERVE AMMO: ${snap.reserve} rounds`, 44, y);
+  ctx.fillText(`RESERVE AMMO: ${snap.reserve} rounds   ·   FLARES: ${snap.flares}`, 44, y);
   ctx.fillText(`ARMOR PLATES: ${'◆'.repeat(snap.armor)}${'◇'.repeat(Math.max(0, 1 - snap.armor))}`, 44, y + 36);
 
   ctx.fillStyle = '#9aa89b';

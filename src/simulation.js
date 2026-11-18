@@ -9,13 +9,14 @@ import { findMazeStep, MAX_PURSUIT_PLAYER_DIST, MAX_TETHER_FROM_HOME, updateHord
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '2.4.3';
+export const BUILD = '2.5.0';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [12, 16, 20, 24], reload: 1.45, interval: 0.28, range: 48, damage: 1, noise: 22, rounds: 1, spread: 0 },
   shotgun: { name: 'Pump shotgun', capacities: [5, 6, 7, 8], reload: 2.1, interval: 0.78, range: 28, damage: 1, noise: 28, rounds: 7, spread: 0.072 },
   smg: { name: 'Compact SMG', capacities: [24, 28, 32, 36], reload: 1.75, interval: 0.10, range: 42, damage: 1, noise: 24, rounds: 1, spread: 0.02 },
   carbine: { name: 'Ranger carbine', capacities: [16, 20, 24, 28], reload: 1.9, interval: 0.22, range: 56, damage: 1, noise: 26, rounds: 1, spread: 0 },
+  flaregun: { name: 'Flare gun', capacities: [1, 1, 1, 1], reload: 1.35, interval: 0.42 },
 };
 
 // Regular zombies die in 1 headshot or 2-3 body shots (shrieker: 2 body, shambler: 3 body).
@@ -37,17 +38,25 @@ export const UPGRADES = {
 
 export const LOOT = {
   ...UPGRADES,
-  ammo: { name: 'Spare rounds', icon: '⋮', color: '#bac5b8' },
+  ammo: { name: 'Spare rounds', icon: 'ammo', color: '#bac5b8' },
+  flareAmmo: { name: 'Spare flares', icon: 'flareAmmo', color: '#ff9664' },
   pistol: { name: 'Service pistol', icon: 'pistol', color: '#f0cc91' },
   shotgun: { name: 'Pump shotgun', icon: 'shotgun', color: '#ffd299' },
   smg: { name: 'Compact SMG', icon: 'smg', color: '#ebbc91' },
   carbine: { name: 'Ranger carbine', icon: 'carbine', color: '#e5ce98' },
-  armor1: { name: 'Padded vest', icon: 'Ⅰ', color: '#9cb9ce' },
+  flaregun: { name: 'Flare gun', icon: 'flaregun', color: '#ff9c66' },
+  armor1: { name: 'Padded vest', icon: 'armor1', color: '#9cb9ce' },
 };
 
 const POINT = { x: 0, y: 0, z: -1 };
 const RESERVE_MAX = 180;
 const ARENA_RESERVE_MAX = 300;
+const FLARE_RESERVE_MAX = 36;
+export const FLARE_BURN = 18;
+export const FLARE_MAX_ACTIVE = 3;
+const FLARE_FLIGHT = 2.5;
+const FLARE_SPEED = 22;
+const FLARE_GRAVITY = 16;
 const MUZZLE_LIGHT_DURATION = 0.22;
 const MUZZLE_LIGHT_RANGE = 20;
 const DRY_SPARK_RANGE = 3.5;
@@ -60,12 +69,17 @@ export function magazineCapacity(player) {
 }
 
 export function isSupply(kind) {
-  return kind === 'ammo';
+  return kind === 'ammo' || kind === 'flareAmmo';
 }
 
-export function beamSettings(mode = 'focus') {
+export function signalFlarePower(age) {
+  const fade = clamp(1 - age / FLARE_BURN, 0, 1);
+  return fade * fade * (3 - 2 * fade);
+}
+
+export function beamSettings(mode = 'wide') {
   const focus = mode === 'focus';
-  return { range: focus ? 36 : 20, angle: focus ? 0.21 : 0.48, powerScale: focus ? 1.35 : 1.15 };
+  return { range: focus ? 22 : 15, angle: focus ? 0.25 : 0.49, powerScale: 1 };
 }
 
 export function activeBeams(run) {
@@ -185,8 +199,8 @@ export function traceAim(run, aim) {
   if (!aim?.origin || !aim?.ray) return null;
   const blocked = muzzleCover(run.world, aim);
   if (blocked) return blocked;
-  const { range } = GUNS[run.player.weapon], ray = norm(aim.ray);
-  const { hits, cover } = traceRay(run.world, aim.origin, ray, range, prepareTargets(run, aim.origin, ray, range));
+  const range = GUNS[run.player.weapon].range ?? 44, ray = norm(aim.ray);
+  const { hits, cover } = traceRay(run.world, aim.origin, ray, range, run.player.weapon === 'flaregun' ? [] : prepareTargets(run, aim.origin, ray, range));
   if (!hits.length) return cover;
   const first = hits[0];
   return { ...first, zone: first.head ? 'head' : 'armor' };
@@ -264,10 +278,11 @@ function spawnWaveRewards(run, clearedWave) {
     setLoot(run, kind, rx, rz, `wave:${clearedWave}:${kind}:${idx}`, amount, LOOT[kind].name);
   };
 
-  // Generous ammunition rewards
+  // Generous ammunition + separate flare rewards
   place('ammo', 16 + clearedWave * 4);
   place('ammo', 14 + clearedWave * 4);
   place('ammo', 12 + clearedWave * 3);
+  place('flareAmmo', 3);
 
   // Better guns across early waves
   if (clearedWave === 1 && !Object.hasOwn(p.magazines, 'shotgun')) place('shotgun');
@@ -297,7 +312,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
     ? createWorld(seed, { mode: 'arena', diameter: rules.diameter, cellSize: rules.cellSize })
     : createWorld(seed, { mode: 'labyrinth', mazeSize: rules.mazeSize, ammoScale: rules.ammoScale });
   const upgrades = Object.fromEntries(Object.keys(UPGRADES).map(k => [k, 0]));
-  const magazines = { pistol: GUNS.pistol.capacities[0] };
+  const magazines = { pistol: GUNS.pistol.capacities[0], flaregun: GUNS.flaregun.capacities[0] };
 
   const run = {
     seed,
@@ -321,15 +336,16 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
       get ammo() { return this.magazines[this.weapon]; },
       set ammo(value) { this.magazines[this.weapon] = value; },
       reserve: runMode === 'arena' ? 60 : 42,
-      get equippedReserve() { return this.reserve; },
-      set equippedReserve(value) { this.reserve = value; },
+      flares: 6,
+      get equippedReserve() { return this.weapon === 'flaregun' ? this.flares : this.reserve; },
+      set equippedReserve(value) { if (this.weapon === 'flaregun') this.flares = value; else this.reserve = value; },
       armor: 0,
       protection: 0,
       cooldown: 0,
       reload: null,
       flashlight: true,
       battery: 1,
-      beam: 'focus',
+      beam: 'wide',
       upgrades,
       kills: 0,
       headshots: 0,
@@ -345,6 +361,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
     loot: [],
     settledLoot: new Set(),
     noises: [],
+    signalFlares: [],
     events: [],
     offer: null,
     beam: null,
@@ -356,7 +373,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
     nextTacticsTick: 0,
     lastChunkCheckX: -1e9,
     lastChunkCheckZ: -1e9,
-    metrics: { shots: 0, dryFire: 0, wallBreaks: 0, roundsPicked: 0, upgrades: 0, hazardsTriggered: 0, pickups: {}, damage: {} },
+    metrics: { shots: 0, dryFire: 0, wallBreaks: 0, roundsPicked: 0, flaresPicked: 0, upgrades: 0, hazardsTriggered: 0, pickups: {}, damage: {} },
   };
 
   if (runMode === 'arena') {
@@ -508,6 +525,52 @@ function eliminate(run, e, headshot) {
   }
 }
 
+function createSignalFlare(aim, blocked) {
+  const ray = norm(aim.ray);
+  if (blocked) {
+    const point = rayPoint(blocked.point, blocked.ray, -0.09);
+    return { x: point.x, y: point.y, z: point.z, vx: 0, vy: 0, vz: 0, settled: true };
+  }
+  const point = rayPoint(aim.origin, ray, 0.06);
+  return { x: point.x, y: point.y, z: point.z, vx: ray.x * FLARE_SPEED, vy: ray.y * FLARE_SPEED, vz: ray.z * FLARE_SPEED, settled: false };
+}
+
+function advanceFlare(world, flare, dt) {
+  if (flare.settled) return;
+  flare.vy -= FLARE_GRAVITY * dt;
+  const dx = flare.vx * dt, dy = flare.vy * dt, dz = flare.vz * dt;
+  const stepDist = Math.hypot(dx, dy, dz);
+  if (stepDist > 0.0001) {
+    const dir = { x: dx / stepDist, y: dy / stepDist, z: dz / stepDist };
+    const hit = world.raycast({ x: flare.x, y: flare.y, z: flare.z }, dir, stepDist + 0.06, false);
+    if (hit) {
+      const stopT = Math.max(0, hit.t - 0.06);
+      flare.x += dir.x * stopT;
+      flare.y += dir.y * stopT;
+      flare.z += dir.z * stopT;
+      flare.vx = flare.vy = flare.vz = 0;
+      flare.settled = true;
+      return;
+    }
+  }
+  flare.x += dx;
+  flare.y += dy;
+  flare.z += dz;
+  const floor = world.height(flare.x, flare.z) + 0.04;
+  if (flare.y <= floor) {
+    flare.y = floor;
+    flare.vx = flare.vy = flare.vz = 0;
+    flare.settled = true;
+  }
+}
+
+function updateSignalFlares(run, dt) {
+  for (const flare of run.signalFlares) {
+    if (!flare.settled) advanceFlare(run.world, flare, dt);
+  }
+  run.signalFlares = run.signalFlares.filter(f => run.time - f.born < FLARE_BURN);
+}
+
 export function shoot(run, aim) {
   const { player: p, world } = run, gun = GUNS[p.weapon];
   if (run.status !== 'playing' || p.cooldown > 0 || p.reload) return;
@@ -532,6 +595,21 @@ export function shoot(run, aim) {
 
   p.ammo--;
   p.cooldown = gun.interval;
+  if (p.weapon === 'flaregun') {
+    run.signalFlares.push({ ...createSignalFlare(aim, blocked), id: 'signal:' + run.nextId++, born: run.time });
+    while (run.signalFlares.length > FLARE_MAX_ACTIVE) run.signalFlares.shift();
+    emit(run, 'shot', {
+      ...flashOrigin,
+      ray: center,
+      weapon: 'flaregun',
+      blocked: Boolean(blocked),
+      range: 12,
+      duration: MUZZLE_LIGHT_DURATION,
+    });
+    if (!p.ammo) startReload(run);
+    return;
+  }
+
   p.noisePeak = run.time + 0.45;
   run.metrics.shots++;
   noise(run, 'gunshot', flashOrigin, gun.noise, 2.4);
@@ -610,7 +688,7 @@ export function shoot(run, aim) {
 
 export function startReload(run) {
   const p = run.player, gun = GUNS[p.weapon];
-  if (p.reload || !p.reserve || p.ammo >= magazineCapacity(p) || run.status !== 'playing') return false;
+  if (p.reload || !p.equippedReserve || p.ammo >= magazineCapacity(p) || run.status !== 'playing') return false;
   const duration = gun.reload * 0.85 ** p.upgrades.reload;
   p.reload = { duration, left: duration, weapon: p.weapon };
   emit(run, 'reload', { weapon: p.weapon });
@@ -640,6 +718,12 @@ function takeLoot(run, confirm) {
       p.reserve += got;
       run.metrics.roundsPicked += got;
       take(run, l, '+' + got + ' rounds');
+    } else if (k === 'flareAmmo') {
+      const got = Math.max(0, Math.min(FLARE_RESERVE_MAX - p.flares, l.amount || 3));
+      if (!got) continue;
+      p.flares += got;
+      run.metrics.flaresPicked = (run.metrics.flaresPicked || 0) + got;
+      take(run, l, '+' + got + ' flares');
     } else if (k in UPGRADES && p.upgrades[k] < UPGRADES[k].cap) {
       p.upgrades[k]++;
       run.metrics.upgrades++;
@@ -855,11 +939,8 @@ function attack(run, enemy, gap, dt) {
       if (age > windup * 0.58 && gap > 0.74 && Math.abs(angleDelta(toward, enemy.yaw)) < 0.52) {
         const stepX = Math.sin(enemy.yaw) * power * dt;
         const stepZ = -Math.cos(enemy.yaw) * power * dt;
-        const zone = enemy.zoneId != null ? run.world.labyrinth.zones[enemy.zoneId] : null;
-        if (!zone || isInsideOwnZone(run.world.labyrinth, zone, enemy.x + stepX, enemy.z + stepZ)) {
-          run.world.move(enemy, stepX, stepZ, shape.width * 0.83);
-          enemy.y = run.world.height(enemy.x, enemy.z);
-        }
+        run.world.move(enemy, stepX, stepZ, shape.width * 0.83);
+        enemy.y = run.world.height(enemy.x, enemy.z);
       }
     }
     enemy.attackAge = age + dt;
@@ -1171,9 +1252,9 @@ export function stepRun(run, input = {}, dt = STEP) {
     p.reload.left -= dt;
     if (p.reload.left <= 0) {
       const need = magazineCapacity(p) - p.ammo;
-      const takeRounds = Math.min(need, p.reserve);
+      const takeRounds = Math.min(need, p.equippedReserve);
       p.ammo += takeRounds;
-      p.reserve -= takeRounds;
+      p.equippedReserve -= takeRounds;
       p.reload = null;
       emit(run, 'reloaded', { weapon: p.weapon, ammo: p.ammo });
     }
@@ -1238,6 +1319,7 @@ export function stepRun(run, input = {}, dt = STEP) {
 
   const head = eye(world, p, p.eyeHeight);
   run.beam = activeLight ? resolvePlayerBeam(run, input.lamp, head) : null;
+  updateSignalFlares(run, dt);
   updateEnemies(run, dt, activeBeams(run));
   for (const corpse of run.corpses) corpse.fallAge = Math.min(1.5, corpse.fallAge + dt);
   return run.events;
@@ -1256,6 +1338,8 @@ export function inventorySnapshot(run) {
       capacity: GUNS[k].capacities[p.upgrades.capacity],
     })),
     reserve: p.reserve,
+    flares: p.flares,
+    equippedReserve: p.equippedReserve,
     armor: p.armor,
     kills: p.kills,
     time: run.time,

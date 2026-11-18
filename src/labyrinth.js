@@ -424,20 +424,35 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
       }
     }
 
-    // Scavenged Ammo & Gun Upgrades + occasional Shotgun / Carbine pickups
+    // Scavenged Ammo, Separate Flares & Gun Upgrades + occasional Shotgun / Carbine pickups
     if (z.kind === 'start') {
       lootSites.push({ id: 'loot:start-ammo', kind: 'ammo', x: z.center.x + 1.6, z: z.center.z - 1.6, amount: Math.max(8, Math.round(14 * ammoScale)), name: 'Reserve Ammo' });
-    } else if (z.kind === 'room' && rng() < Math.min(0.85, 0.65 * ammoScale)) {
-      const cell = z.cells[Math.floor(rng() * z.cells.length)];
-      const pt = cellCenter(cell[0], cell[1]);
-      lootSites.push({
-        id: `loot:ammo:${z.id}`,
-        kind: 'ammo',
-        x: pt.x,
-        z: pt.z,
-        amount: Math.max(6, Math.round((8 + rng() * 8) * ammoScale)),
-        name: 'Ammo Box',
-      });
+      lootSites.push({ id: 'loot:start-flares', kind: 'flareAmmo', x: z.center.x - 1.5, z: z.center.z - 1.5, amount: 3, name: 'Spare flares' });
+    } else if (z.kind === 'room') {
+      if (rng() < Math.min(0.85, 0.65 * ammoScale)) {
+        const cell = z.cells[Math.floor(rng() * z.cells.length)];
+        const pt = cellCenter(cell[0], cell[1]);
+        lootSites.push({
+          id: `loot:ammo:${z.id}`,
+          kind: 'ammo',
+          x: pt.x,
+          z: pt.z,
+          amount: Math.max(6, Math.round((8 + rng() * 8) * ammoScale)),
+          name: 'Ammo Box',
+        });
+      }
+      if (rng() < 0.36) {
+        const cell = z.cells[Math.floor(rng() * z.cells.length)];
+        const pt = cellCenter(cell[0], cell[1]);
+        lootSites.push({
+          id: `loot:flares:${z.id}`,
+          kind: 'flareAmmo',
+          x: pt.x + 0.45,
+          z: pt.z - 0.35,
+          amount: 2 + Math.floor(rng() * 3),
+          name: 'Spare flares',
+        });
+      }
     }
   }
 

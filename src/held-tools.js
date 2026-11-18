@@ -15,6 +15,7 @@ const recoilTuning = {
   shotgun: { pitch: 11.5, yaw: .85, travel: .062, recovery: .15 },
   smg: { pitch: 3.2, yaw: .36, travel: .014, recovery: .145 },
   carbine: { pitch: 6.3, yaw: .50, travel: .036, recovery: .105 },
+  flaregun: { pitch: 9.2, yaw: .6, travel: .042, recovery: .12 },
 };
 
 export const gunAngle = value => Math.max(-25, Math.min(25, Math.round(Number.isFinite(value) ? value : 0)));
@@ -34,7 +35,7 @@ export function toolLayouts(art) {
     if (name === 'pistol') offset.y -= .015;
     if (name in GUNS && name !== 'pistol') offset.y -= .009;
     const muzzle = name === 'glove' ? null : socket('MuzzleSocket').multiplyScalar(scale).add(offset);
-    const support = name in GUNS ? socket('SupportSocket').multiplyScalar(scale).add(offset) : null;
+    const support = (name in GUNS && scene.getObjectByName('SupportSocket')) ? socket('SupportSocket').multiplyScalar(scale).add(offset) : null;
     return [name, { scale, offset, muzzle, support }];
   }));
   const lamp = layouts.flashlight, scale = .45;

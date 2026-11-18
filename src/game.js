@@ -30,7 +30,7 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 1.4));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.18;
+renderer.toneMappingExposure = 1.07;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.xr.enabled = true;
@@ -640,7 +640,7 @@ function updateHUD(force = false) {
   text('weapon-name', GUNS[p.weapon].name.toUpperCase());
   const rounds = count => String(count).padStart(2, '0');
   $('rounds').firstChild.textContent = rounds(p.ammo) + ' ';
-  $('rounds').lastChild.textContent = '/ ' + p.reserve;
+  $('rounds').lastChild.textContent = '/ ' + p.equippedReserve;
   const light = (p.flashlight ? p.beam.toUpperCase() : 'RECHARGING') + ' · ' + display + '%';
   text('light-text', light);
   $('charge').style.transform = 'scaleX(' + p.battery + ')';
@@ -713,7 +713,7 @@ function xrUI(sample, trackedView) {
         title: 'Paused',
         lines: [
           pauseReason,
-          `Kills: ${run.player.kills}   ·   Ammo: ${run.player.ammo}/${run.player.reserve}   ·   ${run.mode === 'arena' ? `Wave ${run.wave?.number || 1} · ` : ''}${run.rules.name}`,
+          `Kills: ${run.player.kills}   ·   Ammo: ${run.player.ammo}/${run.player.equippedReserve}   ·   ${run.mode === 'arena' ? `Wave ${run.wave?.number || 1} · ` : ''}${run.rules.name}`,
         ],
         hint: sample.weaponTracked ? 'TRIGGER  ·  RESUME' : 'CONNECT WEAPON CONTROLLER',
         second: 'B  ·  SURVIVAL KIT      A  ·  GUN ANGLE',

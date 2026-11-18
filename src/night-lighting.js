@@ -97,9 +97,8 @@ export function beamTexture(headlight = false) {
   for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
     const u = (x + .5) / size * 2 - 1, v = (y + .5) / size * 2 - 1;
     const radius = Math.hypot(u, v * (headlight ? 2.45 : 1));
-    const falloff = clamp((1 - radius) / .52, 0, 1);
-    const core = Math.exp(-radius * radius * 4.2);
-    const power = falloff * falloff * (3 - 2 * falloff) * (.32 + .68 * core);
+    const falloff = clamp((1 - radius) / .55, 0, 1);
+    const power = falloff * falloff * (3 - 2 * falloff) * (.44 + .56 * Math.exp(-radius * radius * 5.5));
     const index = (y * size + x) * 4;
     pixels[index] = pixels[index + 1] = pixels[index + 2] = Math.round(power * 255);
     pixels[index + 3] = 255;
