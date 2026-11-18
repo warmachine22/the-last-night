@@ -12,7 +12,7 @@ function advance(run, seconds, input = {}) {
 }
 
 test('all three difficulty maze sizes (64m, 96m, 144m) generate fully connected rooms, hallways, hazards, and one exit', () => {
-  assert.equal(BUILD, '2.1.0');
+  assert.equal(BUILD, '2.1.1');
   for (const [key, spec] of Object.entries(DIFFICULTIES)) {
     const lab = createLabyrinth('seed-' + key, spec.mazeSize, spec.ammoScale);
     assert.equal(lab.sizeMeters, spec.mazeSize);
@@ -33,13 +33,11 @@ test('all three difficulty maze sizes (64m, 96m, 144m) generate fully connected 
   }
 });
 
-test('flashlight mode uses non-upgradable 30s beam; no-light mode disables flashlight with infinite bullets', () => {
+test('non-upgradable 30s flashlight works and dry-fire emits a weak spark', () => {
   assert.equal('battery' in UPGRADES, false);
   assert.equal('lens' in UPGRADES, false);
 
-  // Flashlight mode
-  const flRun = createRun('fl-mode', { populate: false, difficulty: 'standard', mode: 'flashlight' });
-  assert.equal(flRun.noLight, false);
+  const flRun = createRun('fl-mode', { populate: false, difficulty: 'standard' });
   assert.equal(flRun.player.flashlight, true);
   const lamp = { origin: { x: flRun.player.x, y: flRun.player.y + 1.4, z: flRun.player.z }, ray: { x: 0, y: 0, z: -1 } };
   advance(flRun, 15, { lamp });
@@ -49,42 +47,38 @@ test('flashlight mode uses non-upgradable 30s beam; no-light mode disables flash
   advance(flRun, 5.1, {});
   assert.equal(flRun.player.battery, 1);
 
-  // No Light mode: no flashlight, infinite ammo reloads
-  const nlRun = createRun('nl-mode', { populate: false, difficulty: 'standard', mode: 'noLight' });
-  assert.equal(nlRun.noLight, true);
-  assert.equal(nlRun.player.flashlight, false);
-  assert.equal(nlRun.player.reserve, Infinity);
-  stepRun(nlRun, { toggleLight: true, toggleBeam: true });
-  assert.equal(nlRun.player.flashlight, false, 'flashlight cannot turn on in No Light mode');
-  nlRun.player.ammo = 0;
-  stepRun(nlRun, { fire: true, aim: lamp }); // auto-starts reload
-  advance(nlRun, 1.6, {});
-  assert.equal(nlRun.player.ammo, 12, 'magazine refills from infinite reserve in No Light mode');
-  assert.equal(nlRun.player.reserve, Infinity);
+  flRun.player.ammo = 0;
+  flRun.player.reserve = 0;
+  const dryEv = stepRun(flRun, { fire: true, aim: lamp });
+  assert.ok(dryEv.some(e => e.type === 'dry' && e.spark && e.range <= 4));
 });
 
-test('spray can toggles like a weapon in both modes and stamps marks onto walls and floors', () => {
-  for (const mode of ['flashlight', 'noLight']) {
-    const run = createRun('spray-' + mode, { populate: false, mode });
-    assert.ok('spraycan' in run.player.magazines);
-    stepRun(run, { cycleWeapon: true });
-    assert.equal(run.player.weapon, 'spraycan');
-    run.player.cooldown = 0;
+test('spray can toggles like a weapon and stamps valid non-zero surface-normal marks onto walls and floors', () => {
+  const run = createRun('spray-test', { populate: false });
+  assert.ok('spraycan' in run.player.magazines);
+  stepRun(run, { cycleWeapon: true });
+  assert.equal(run.player.weapon, 'spraycan');
+  run.player.cooldown = 0;
 
-    // Spray onto floor & wall
-    const sprayFloor = { origin: { x: run.player.x, y: 1.4, z: run.player.z }, ray: { x: 0, y: -1, z: -0.4 } };
-    const sprayWall = { origin: { x: run.player.x, y: 1.4, z: run.player.z }, ray: { x: 0, y: 0, z: -1 } };
-    const evFloor = stepRun(run, { fire: true, aim: sprayFloor });
-    run.player.cooldown = 0;
-    const evWall = stepRun(run, { fire: true, aim: sprayWall });
-    assert.ok(evFloor.some(e => e.type === 'spray' && e.ny > 0.9), `${mode}: spray should adhere to floor`);
-    assert.ok(evWall.some(e => e.type === 'spray' && Math.abs(e.nz) > 0.9), `${mode}: spray should adhere to wall`);
-    assert.equal(run.paintMarks.length, 2);
+  const sprayFloor = { origin: { x: run.player.x, y: 1.4, z: run.player.z }, ray: { x: 0, y: -1, z: -0.4 } };
+  const sprayWall = { origin: { x: run.player.x, y: 1.4, z: run.player.z }, ray: { x: 0, y: 0, z: -1 } };
+  const evFloor = stepRun(run, { fire: true, aim: sprayFloor });
+  run.player.cooldown = 0;
+  const evWall = stepRun(run, { fire: true, aim: sprayWall });
+  assert.ok(evFloor.some(e => e.type === 'spray' && e.ny > 0.9 && Math.hypot(e.nx, e.ny, e.nz) > 0.9));
+  assert.ok(evWall.some(e => e.type === 'spray' && Math.abs(e.nz) > 0.9 && Math.hypot(e.nx, e.ny, e.nz) > 0.9));
+  assert.equal(run.paintMarks.length, 2);
 
-    // Cycle back to pistol
-    stepRun(run, { cycleWeapon: true });
-    assert.equal(run.player.weapon, 'pistol');
+  // Even when aiming tightly up against a wall box, normal must stay finite & unit length
+  const tightAim = { origin: { x: run.player.x, y: 1.4, z: run.player.z - 2.95 }, ray: { x: 0, y: 0, z: -1 } };
+  run.player.cooldown = 0;
+  stepRun(run, { fire: true, aim: tightAim });
+  for (const m of run.paintMarks) {
+    assert.ok(Number.isFinite(m.x + m.y + m.z) && Math.hypot(m.nx, m.ny, m.nz) > 0.9);
   }
+
+  stepRun(run, { cycleWeapon: true });
+  assert.equal(run.player.weapon, 'pistol');
 });
 
 test('1 headshot kills regulars, 2-3 body shots kill regulars, brutes need 3 headshots or 6 body shots', () => {
@@ -121,7 +115,7 @@ test('1 headshot kills regulars, 2-3 body shots kill regulars, brutes need 3 hea
 });
 
 test('idle zombies wait hidden without wandering past doors, ambush from behind, chase briefly out, return home, and cap voices at <= 4', () => {
-  const run = createRun('ambush-ai', { populate: false, difficulty: 'standard', mode: 'noLight' });
+  const run = createRun('ambush-ai', { populate: false, difficulty: 'standard' });
   const lab = run.world.labyrinth;
   const room = lab.zones.find(z => z.kind === 'room' && z.doors.length > 0 && z.wallCells.length >= 2);
   assert.ok(room);
@@ -155,7 +149,7 @@ test('idle zombies wait hidden without wandering past doors, ambush from behind,
   assert.equal(ambusher.tactic?.role, 'returning');
 
   // 4) Audio cap: even with 10 close alerted zombies, only <= 4 emit voices simultaneously
-  const crowdRun = createRun('voice-cap', { populate: false, difficulty: 'standard', mode: 'noLight' });
+  const crowdRun = createRun('voice-cap', { populate: false, difficulty: 'standard' });
   const zList = [];
   for (let i = 0; i < 10; i++) {
     const z = addEnemy(crowdRun, 'shambler', crowdRun.player.x + (i % 3) * 0.5, crowdRun.player.z - 2.0 - Math.floor(i / 3) * 0.4, {

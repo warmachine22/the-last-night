@@ -25,7 +25,7 @@ export function random(seed) {
 }
 
 function rayAABB(origin, ray, minX, maxX, minY, maxY, minZ, maxZ, max) {
-  let near = 0, far = max;
+  let near = -Infinity, far = max;
   let nx = 0, ny = 0, nz = 0;
   for (const [axis, o, d, lo, hi] of [
     [0, origin.x, ray.x, minX, maxX],
@@ -45,10 +45,14 @@ function rayAABB(origin, ray, minX, maxX, minY, maxY, minZ, maxZ, max) {
         nz = axis === 2 ? sign : 0;
       }
       far = Math.min(far, b);
-      if (near > far) return null;
+      if (near > far || far < 0) return null;
     }
   }
-  return { t: near, normal: { x: nx, y: ny, z: nz } };
+  if (!nx && !ny && !nz) {
+    if (Math.abs(ray.x) >= Math.abs(ray.z)) nx = ray.x > 0 ? -1 : 1;
+    else nz = ray.z > 0 ? -1 : 1;
+  }
+  return { t: Math.max(0, near), normal: { x: nx, y: ny, z: nz } };
 }
 
 function circleHitsBox(x, z, radius, bx, bz, rx, rz) {

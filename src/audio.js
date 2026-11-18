@@ -332,8 +332,8 @@ export function createAudio() {
         play(e.kind, { gain: e.quiet ? .25 : .64, loc: e, speed: .9 + Math.random() * .2 });
       } else if (e.type === 'wallBump') {
         play('wallBump', { gain: .28, speed: .92 + Math.random() * .18 });
-      } else if (e.type === 'spray') {
-        play('spray', { gain: .28, speed: .95 + Math.random() * .12 });
+      } else if (e.type === 'spray' && e.sound) {
+        play('spray', { gain: .24, speed: .95 + Math.random() * .10 });
       } else if (e.type === 'dotHit') {
         play('dotPop', { gain: .48, loc: e });
       } else if (e.type === 'deflect') {

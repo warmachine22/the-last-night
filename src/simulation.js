@@ -1,4 +1,4 @@
-import { DIFFICULTIES, difficultyKey, modeKey, MODES } from './difficulty.js';
+import { DIFFICULTIES, difficultyKey } from './difficulty.js';
 import {
   animatedAnchors, attackContact, attackDirection, burstPhase, BURST_BRAKE, BURST_LOAD, BURST_RUN,
   enemyMotion, HIT_SEGMENTS, hitRadii, strideLength, updateEnemyFooting,
@@ -8,14 +8,14 @@ import { findMazeStep, MAX_PURSUIT_PLAYER_DIST, MAX_TETHER_FROM_HOME, updateHord
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '2.1.0';
+export const BUILD = '2.1.1';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [12, 16, 20, 24], reload: 1.45, interval: 0.28, range: 48, damage: 1, noise: 22, rounds: 1, spread: 0 },
   shotgun: { name: 'Pump shotgun', capacities: [5, 6, 7, 8], reload: 2.1, interval: 0.78, range: 28, damage: 1, noise: 28, rounds: 7, spread: 0.072 },
   smg: { name: 'Compact SMG', capacities: [24, 28, 32, 36], reload: 1.75, interval: 0.10, range: 42, damage: 1, noise: 24, rounds: 1, spread: 0.02 },
   carbine: { name: 'Ranger carbine', capacities: [16, 20, 24, 28], reload: 1.9, interval: 0.22, range: 56, damage: 1, noise: 26, rounds: 1, spread: 0 },
-  spraycan: { name: 'Spray can', capacities: [1, 1, 1, 1], reload: 0, interval: 0.08, range: 4.2, spray: true },
+  spraycan: { name: 'Spray can', capacities: [1, 1, 1, 1], reload: 0, interval: 0.14, range: 5.5, spray: true },
 };
 
 // Regular zombies die in 1 headshot or 2-3 body shots (shrieker: 2 body, shambler: 3 body).
@@ -197,10 +197,8 @@ function emit(run, type, data = {}) {
   run.events.push({ type, ...data });
 }
 
-export function createRun(seed = 'last-night', { populate = true, difficulty = 'standard', mode = 'flashlight' } = {}) {
+export function createRun(seed = 'last-night', { populate = true, difficulty = 'standard' } = {}) {
   const key = difficultyKey(difficulty);
-  const mKey = modeKey(mode);
-  const noLight = MODES[mKey].noLight;
   const rules = DIFFICULTIES[key];
   const world = createWorld(seed, { mazeSize: rules.mazeSize, ammoScale: rules.ammoScale });
   const upgrades = Object.fromEntries(Object.keys(UPGRADES).map(k => [k, 0]));
@@ -209,8 +207,6 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
   const run = {
     seed,
     difficulty: key,
-    mode: mKey,
-    noLight,
     rules,
     world,
     populate,
@@ -227,16 +223,16 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
       magazines,
       get ammo() { return this.magazines[this.weapon]; },
       set ammo(value) { this.magazines[this.weapon] = value; },
-      reserve: noLight ? Infinity : 20,
+      reserve: 20,
       get equippedReserve() { return this.reserve; },
       set equippedReserve(value) { this.reserve = value; },
       armor: 0,
       protection: 0,
       cooldown: 0,
       reload: null,
-      flashlight: !noLight,
-      battery: noLight ? 0 : 1,
-      beam: noLight ? 'off' : 'wide',
+      flashlight: true,
+      battery: 1,
+      beam: 'wide',
       upgrades,
       kills: 0,
       headshots: 0,
@@ -245,6 +241,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
       travelX: 0,
       travelZ: 0,
       lastWallBump: -9,
+      spraySoundUntil: -9,
     },
     roster: [],
     enemies: [],
@@ -252,6 +249,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
     loot: [],
     settledLoot: new Set(),
     paintMarks: [],
+    paintVersion: 0,
     noises: [],
     events: [],
     offer: null,
@@ -411,23 +409,29 @@ function sprayPaint(run, aim) {
   p.cooldown = gun.interval;
   const hit = world.raycast(o, center, gun.range, true);
   if (!hit || !hit.normal) return;
+  const nLen = Math.hypot(hit.normal.x, hit.normal.y, hit.normal.z);
+  if (nLen < 0.5) return;
+  const nx = hit.normal.x / nLen, ny = hit.normal.y / nLen, nz = hit.normal.z / nLen;
   const pt = rayPoint(o, center, hit.t);
   const mark = {
-    x: pt.x + hit.normal.x * 0.012,
-    y: pt.y + hit.normal.y * 0.012,
-    z: pt.z + hit.normal.z * 0.012,
-    nx: hit.normal.x,
-    ny: hit.normal.y,
-    nz: hit.normal.z,
+    x: pt.x + nx * 0.015,
+    y: pt.y + ny * 0.015,
+    z: pt.z + nz * 0.015,
+    nx,
+    ny,
+    nz,
     surface: hit.kind,
   };
   for (let i = Math.max(0, run.paintMarks.length - 8); i < run.paintMarks.length; i++) {
     const prev = run.paintMarks[i];
-    if (Math.hypot(mark.x - prev.x, mark.y - prev.y, mark.z - prev.z) < 0.14) return;
+    if (Math.hypot(mark.x - prev.x, mark.y - prev.y, mark.z - prev.z) < 0.22) return;
   }
   run.paintMarks.push(mark);
-  if (run.paintMarks.length > 450) run.paintMarks.shift();
-  emit(run, 'spray', mark);
+  if (run.paintMarks.length > 160) run.paintMarks.shift();
+  run.paintVersion++;
+  const sound = run.time >= p.spraySoundUntil;
+  if (sound) p.spraySoundUntil = run.time + 0.28;
+  emit(run, 'spray', { ...mark, sound });
 }
 
 export function shoot(run, aim) {
@@ -526,7 +530,7 @@ export function shoot(run, aim) {
 
 export function startReload(run) {
   const p = run.player, gun = GUNS[p.weapon];
-  if (gun.spray || p.reload || (!run.noLight && !p.reserve) || p.ammo >= magazineCapacity(p) || run.status !== 'playing') return false;
+  if (gun.spray || p.reload || !p.reserve || p.ammo >= magazineCapacity(p) || run.status !== 'playing') return false;
   const duration = gun.reload * 0.85 ** p.upgrades.reload;
   p.reload = { duration, left: duration, weapon: p.weapon };
   emit(run, 'reload', { weapon: p.weapon });
@@ -550,7 +554,6 @@ function takeLoot(run, confirm) {
     }
 
     if (k === 'ammo') {
-      if (run.noLight) continue;
       const got = Math.max(0, Math.min(RESERVE_MAX - p.reserve, l.amount || 6));
       if (!got) continue;
       p.reserve += got;
@@ -569,10 +572,8 @@ function takeLoot(run, confirm) {
   const item = run.offer;
   if (!confirm || !item) return;
   if (item.kind in GUNS) {
-    p.magazines[item.kind] = run.noLight
-      ? GUNS[item.kind].capacities[p.upgrades.capacity]
-      : Math.min(GUNS[item.kind].capacities[p.upgrades.capacity], Math.max(4, p.reserve));
-    if (!run.noLight) p.reserve = Math.max(0, p.reserve - p.magazines[item.kind]);
+    p.magazines[item.kind] = Math.min(GUNS[item.kind].capacities[p.upgrades.capacity], Math.max(4, p.reserve));
+    p.reserve = Math.max(0, p.reserve - p.magazines[item.kind]);
     equipWeapon(p, item.kind);
   } else {
     p.armor = Number(item.kind.at(-1));
@@ -936,7 +937,6 @@ function updateEnemies(run, dt, lamps) {
 }
 
 export function inspectFlashlights(run, input) {
-  if (run.noLight) return;
   const p = run.player;
   if (input.toggleLight) {
     if (!p.flashlight && p.battery <= 0) emit(run, 'light', { on: false, empty: true });
@@ -983,9 +983,9 @@ export function stepRun(run, input = {}, dt = STEP) {
     p.reload.left -= dt;
     if (p.reload.left <= 0) {
       const need = magazineCapacity(p) - p.ammo;
-      const takeRounds = run.noLight ? need : Math.min(need, p.reserve);
+      const takeRounds = Math.min(need, p.reserve);
       p.ammo += takeRounds;
-      if (!run.noLight) p.reserve -= takeRounds;
+      p.reserve -= takeRounds;
       p.reload = null;
       emit(run, 'reloaded', { weapon: p.weapon, ammo: p.ammo });
     }
@@ -995,12 +995,9 @@ export function stepRun(run, input = {}, dt = STEP) {
   if (input.cycleWeapon) cycleWeapon(run);
   inspectFlashlights(run, input);
 
-  // Fixed non-upgradable 30s flashlight battery (disabled completely in No Light mode)
-  const activeLight = !run.noLight && p.flashlight && p.beam !== 'off' && !input.lampUnavailable;
-  if (run.noLight) {
-    p.flashlight = false;
-    p.battery = 0;
-  } else if (activeLight) {
+  // Fixed non-upgradable 30s flashlight battery
+  const activeLight = p.flashlight && p.beam !== 'off' && !input.lampUnavailable;
+  if (activeLight) {
     p.battery = Math.max(0, p.battery - dt / FLASHLIGHT_RUNTIME);
     if (p.battery === 0) {
       p.flashlight = false;
@@ -1076,12 +1073,10 @@ export function inventorySnapshot(run) {
       spray: Boolean(GUNS[k].spray),
     })),
     reserve: p.reserve,
-    noLight: run.noLight,
     armor: p.armor,
     kills: p.kills,
     time: run.time,
     difficulty: run.rules.name,
-    modeName: MODES[run.mode].name,
     upgrades: Object.entries(UPGRADES).map(([k, u]) => ({
       key: k,
       name: u.name,

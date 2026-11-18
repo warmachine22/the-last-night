@@ -28,10 +28,4 @@ export const DIFFICULTIES = {
   },
 };
 
-export const MODES = {
-  flashlight: { name: 'Flashlight Mode', noLight: false },
-  noLight: { name: 'No Light Mode (∞ Ammo)', noLight: true },
-};
-
 export const difficultyKey = value => (value === 'hard' || value === 'nightmare' ? value : 'standard');
-export const modeKey = value => (value === 'noLight' ? 'noLight' : 'flashlight');

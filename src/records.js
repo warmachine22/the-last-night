@@ -1,13 +1,13 @@
 import { BUILD } from './simulation.js';
 import { gunAngle } from './held-tools.js';
-import { DIFFICULTIES, difficultyKey, modeKey } from './difficulty.js';
+import { DIFFICULTIES, difficultyKey } from './difficulty.js';
 
 const scoresKey = 'thelastnight.scores.v1';
 const settingsKey = 'thelastnight.settings.v1';
 const defaults = {
   leftHanded: false, seated: false, reducedFlashes: false, visibility: false,
   laserDot: false, volume: 0.75, initials: 'YOU', gunPitch: 0, gunYaw: 0,
-  difficulty: 'standard', mode: 'flashlight',
+  difficulty: 'standard',
 };
 let fallbackScores = [];
 
@@ -38,7 +38,6 @@ export function loadSettings() {
   settings.gunPitch = gunAngle(settings.gunPitch);
   settings.gunYaw = gunAngle(settings.gunYaw);
   settings.difficulty = difficultyKey(settings.difficulty);
-  settings.mode = modeKey(settings.mode);
   return settings;
 }
 

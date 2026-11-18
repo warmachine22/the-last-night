@@ -22,7 +22,6 @@ export function questButtons(right, left, leftHanded) {
     toggleBeam: button(left, 4),
     pause: button(left, 5),
     menuDifficulty: button(left, 4),
-    menuMode: button(right, 5),
     toggleMap: button(right, 5),
   };
 }

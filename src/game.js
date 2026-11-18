@@ -8,7 +8,7 @@ import { createAudio } from './audio.js';
 import { createXR } from './xr.js';
 import { formatTime, initials, listScores, loadSettings, rapidSeed, recordRun, saveSettings } from './records.js';
 import { createGunHandling, gunAngle, heldPose, mountedAim, shotgunPumpTravel, toolLayouts } from './held-tools.js';
-import { DIFFICULTIES, MODES } from './difficulty.js';
+import { DIFFICULTIES } from './difficulty.js';
 import { drawFieldMapAndInventory } from './map-ui.js';
 
 const $ = id => document.getElementById(id);
@@ -126,7 +126,7 @@ function pointerLock() {
 
 function start(seed = rapidSeed()) {
   useMouseDrag = false;
-  run = createRun(seed, { difficulty: settings.difficulty, mode: settings.mode, populate: true });
+  run = createRun(seed, { difficulty: settings.difficulty, populate: true });
   yaw = pitch = roomX = roomZ = 0;
   runId = rapidSeed();
   shotgunFiredAt = -Infinity;
@@ -289,15 +289,6 @@ diffSelect.addEventListener('change', () => {
   panelKey = '';
   saveSettings(settings);
 });
-const modeOptions = Object.entries(MODES).map(([value, spec]) => [value, spec.name]);
-const modeSelect = $('mode');
-modeSelect.replaceChildren(...modeOptions.map(([value, label]) => new Option(label, value)));
-modeSelect.value = settings.mode;
-modeSelect.addEventListener('change', () => {
-  settings.mode = modeOptions[modeSelect.selectedIndex][0];
-  panelKey = '';
-  saveSettings(settings);
-});
 $('score-difficulty').replaceChildren(...difficultyOptions.map(([value, label]) => new Option(label, value)));
 $('score-difficulty').addEventListener('change', showScores);
 
@@ -305,14 +296,6 @@ function cycleDifficulty() {
   const index = difficultyOptions.findIndex(([value]) => value === settings.difficulty);
   settings.difficulty = difficultyOptions[(index + 1) % difficultyOptions.length][0];
   diffSelect.value = settings.difficulty;
-  panelKey = '';
-  saveSettings(settings);
-}
-
-function cycleMode() {
-  const index = modeOptions.findIndex(([value]) => value === settings.mode);
-  settings.mode = modeOptions[(index + 1) % modeOptions.length][0];
-  modeSelect.value = settings.mode;
   panelKey = '';
   saveSettings(settings);
 }
@@ -569,7 +552,7 @@ function handleEvent(batch) {
     } else if (event.type === 'wallBump') {
       xr.haptic('wallBump', settings);
     } else if (event.type === 'spray') {
-      xr.haptic('spray', settings);
+      if (event.sound) xr.haptic('spray', settings);
     } else if (event.type === 'shot') {
       if (event.weapon === 'shotgun') shotgunFiredAt = run.time;
       handling.kick(settings.leftHanded);
@@ -592,7 +575,7 @@ function updateHUD(force = false) {
   hudAt = run.time + 0.07;
   const p = run.player, display = Math.ceil(p.battery * 100);
   text('clock', formatTime(run.time));
-  text('hud-parts', `${DIFFICULTIES[run.difficulty].name.toUpperCase()} · ${MODES[run.mode].name.toUpperCase()}`);
+  text('hud-parts', DIFFICULTIES[run.difficulty].name.toUpperCase());
   text('weapon-name', GUNS[p.weapon].name.toUpperCase());
   const rounds = count => String(count).padStart(2, '0');
   if (GUNS[p.weapon].spray) {
@@ -600,11 +583,11 @@ function updateHUD(force = false) {
     $('rounds').lastChild.textContent = '∞';
   } else {
     $('rounds').firstChild.textContent = rounds(p.ammo) + ' ';
-    $('rounds').lastChild.textContent = '/ ' + (run.noLight ? '∞' : p.reserve);
+    $('rounds').lastChild.textContent = '/ ' + p.reserve;
   }
-  const light = run.noLight ? 'NO LIGHT MODE · ∞ AMMO' : (p.flashlight ? p.beam.toUpperCase() : 'RECHARGING') + ' · ' + display + '%';
+  const light = (p.flashlight ? p.beam.toUpperCase() : 'RECHARGING') + ' · ' + display + '%';
   text('light-text', light);
-  $('charge').style.transform = 'scaleX(' + (run.noLight ? 0 : p.battery) + ')';
+  $('charge').style.transform = 'scaleX(' + p.battery + ')';
   text('armor', '◆'.repeat(p.armor) + '◇'.repeat(Math.max(0, 1 - p.armor)));
   $('armor').setAttribute('aria-label', p.armor + ' armor charges');
   text('notice', run.time < noticeUntil ? notice : perfReport());
@@ -646,19 +629,17 @@ function xrUI(sample, trackedView) {
     xr.drawAimPreview(null);
     return;
   }
-  const key = calibrating ? 'angle:' + settings.gunPitch + ':' + settings.gunYaw : phase + ':' + sample.tracked + ':' + settings.difficulty + ':' + settings.mode;
+  const key = calibrating ? 'angle:' + settings.gunPitch + ':' + settings.gunYaw : phase + ':' + sample.tracked + ':' + settings.difficulty;
   if (panelKey !== key) {
     panelKey = key;
     const cards = {
       menu: {
         title: 'The Last Night',
         lines: [
-          'Difficulty: ' + DIFFICULTIES[settings.difficulty].name + ' (X)   |   Mode: ' + MODES[settings.mode].name + ' (B)',
-          settings.mode === 'noLight'
-            ? 'No Light Mode: No flashlight, infinite bullets—gunfire flash is your only light.'
-            : 'Flashlight Mode: Fixed 30s flashlight + scarce ammo. Toggle Spray Can (B) to mark walls.',
+          'Difficulty: ' + DIFFICULTIES[settings.difficulty].name + '   (X changes size & danger)',
+          'Fixed 30s flashlight + muzzle light. Toggle Spray Can (B) to mark walls & floors.',
           'Headshots kill regulars (2-3 body). Brutes take 3 head / 6 body. Zombies ambush from behind!',
-          'Reach the single perimeter EXIT while avoiding noise traps.',
+          'Manage scarce ammo and escape through the single perimeter EXIT.',
         ],
         hint: sample.tracked ? 'WEAPON TRIGGER  ·  START' : 'CONNECT BOTH CONTROLLERS',
         second: 'A  ·  GUN ANGLE',
@@ -667,7 +648,7 @@ function xrUI(sample, trackedView) {
         title: 'Paused',
         lines: [
           pauseReason,
-          `Kills: ${run.player.kills}   ·   Ammo: ${run.player.ammo}/${run.noLight ? '∞' : run.player.reserve}   ·   ${MODES[run.mode].name}`,
+          `Kills: ${run.player.kills}   ·   Ammo: ${run.player.ammo}/${run.player.reserve}   ·   ${DIFFICULTIES[run.difficulty].name}`,
         ],
         hint: sample.weaponTracked ? 'TRIGGER  ·  RESUME' : 'CONNECT WEAPON CONTROLLER',
         second: 'B  ·  SURVIVAL KIT      A  ·  GUN ANGLE',
@@ -771,7 +752,6 @@ function frame(now, xrFrame) {
             updateGunSettings(settings.gunPitch + sample.anglePitch, settings.gunYaw + sample.angleYaw);
           }
         } else if (phase === 'menu' && sample.menuDifficulty) cycleDifficulty();
-        else if (phase === 'menu' && sample.menuMode) cycleMode();
         else if (phase === 'paused' && sample.toggleMap) openMapView();
         else if (phase === 'paused' && sample.pause) resume();
         else if (sample.reload) { calibrating = true; panelKey = ''; }

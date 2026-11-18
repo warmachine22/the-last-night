@@ -347,22 +347,25 @@ export function createPresentation(scene, art, layouts) {
   }
 
   const paintMesh = new THREE.InstancedMesh(
-    new THREE.CircleGeometry(0.11, 10),
+    new THREE.CircleGeometry(0.14, 12),
     new THREE.MeshStandardMaterial({
       color: 0xff621a,
-      emissive: 0x3b1203,
+      emissive: 0x451604,
       roughness: 0.55,
       polygonOffset: true,
       polygonOffsetFactor: -2,
       side: THREE.DoubleSide,
     }),
-    450,
+    160,
   );
   paintMesh.count = 0;
+  paintMesh.visible = false;
   paintMesh.frustumCulled = false;
   scene.add(paintMesh);
   const paintQuat = new THREE.Quaternion();
+  const paintNormal = v3(0, 1, 0);
   const forwardZ = v3(0, 0, 1);
+  const paintDummy = new THREE.Object3D();
 
   const iconTextures = Object.fromEntries(Object.keys(LOOT).map(kind => [kind, lootIcon(kind)]));
   const chunks = new Map();
@@ -393,7 +396,7 @@ export function createPresentation(scene, art, layouts) {
   let tick = 0;
   let currentRun = null;
   let artworkLit = null;
-  let syncedPaint = 0;
+  let paintVersion = -1;
 
   function reset(run) {
     currentRun = run;
@@ -406,25 +409,31 @@ export function createPresentation(scene, art, layouts) {
     for (const effect of effects.splice(0)) { effect.mesh.visible = false; impactPool.push(effect.mesh); }
     flashState.shot = null;
     paintMesh.count = 0;
-    syncedPaint = 0;
+    paintMesh.visible = false;
+    paintVersion = -1;
   }
 
   function syncPaintMarks(run) {
+    const version = run.paintVersion || 0;
+    if (version === paintVersion) return;
+    paintVersion = version;
     const marks = run.paintMarks || [];
-    if (marks.length === syncedPaint && marks.length < 450) return;
-    const count = Math.min(450, marks.length);
+    const count = Math.min(160, marks.length);
     for (let i = 0; i < count; i++) {
       const m = marks[i];
-      temp.position.set(m.x, m.y, m.z);
-      paintQuat.setFromUnitVectors(forwardZ, temp.up.set(m.nx, m.ny, m.nz));
-      temp.quaternion.copy(paintQuat);
-      temp.scale.setScalar(0.85 + (i % 4) * 0.12);
-      temp.updateMatrix();
-      paintMesh.setMatrixAt(i, temp.matrix);
+      const len = Math.hypot(m.nx, m.ny, m.nz);
+      if (len < 0.5) paintNormal.set(0, 1, 0);
+      else paintNormal.set(m.nx / len, m.ny / len, m.nz / len);
+      paintDummy.position.set(m.x, m.y, m.z);
+      paintQuat.setFromUnitVectors(forwardZ, paintNormal);
+      paintDummy.quaternion.copy(paintQuat);
+      paintDummy.scale.setScalar(0.88 + (i % 4) * 0.12);
+      paintDummy.updateMatrix();
+      paintMesh.setMatrixAt(i, paintDummy.matrix);
     }
     paintMesh.count = count;
-    paintMesh.instanceMatrix.needsUpdate = true;
-    syncedPaint = marks.length;
+    paintMesh.visible = count > 0;
+    if (count > 0) paintMesh.instanceMatrix.needsUpdate = true;
   }
 
   function discardChunk(group) {
@@ -648,7 +657,7 @@ export function createPresentation(scene, art, layouts) {
     const showHands = active || inspecting;
     for (const [k, m] of Object.entries(guns)) m.visible = k === p.weapon;
     weaponAnchor.visible = (showHands || calibration) && !!tracking.weapon;
-    lampAnchor.visible = !run.noLight && showHands && !!tracking.lamp;
+    lampAnchor.visible = showHands && !!tracking.lamp;
     const hand = tracking.support || tracking.lamp;
     supportAnchor.visible = showHands && !!hand;
     if (tracking.weapon) {
