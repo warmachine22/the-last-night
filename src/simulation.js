@@ -9,7 +9,7 @@ import { findMazeStep, MAX_PURSUIT_PLAYER_DIST, MAX_TETHER_FROM_HOME, updateHord
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '2.4.1';
+export const BUILD = '2.4.2';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [12, 16, 20, 24], reload: 1.45, interval: 0.28, range: 48, damage: 1, noise: 22, rounds: 1, spread: 0 },
@@ -27,22 +27,16 @@ export const ENEMIES = {
   brute: { speed: 0.49, chaseSpeed: 1.20, height: 2.0, width: 0.36, hp: 6, windup: 0.82, reach: 1.35 },
 };
 
-// Flashlight is NOT upgradable in Labyrinth — only firearm upgrades exist there.
-// In Tight Space Arena mode, incremental Flashlight upgrades ('light') also spawn between waves.
+// One standard infinite bright narrow-cone flashlight across both modes; firearm upgrades apply to guns.
 export const UPGRADES = {
-  damage: { name: 'Hot loads', icon: '▲', cap: 3, color: '#ff8b70', description: '+15% impact stagger' },
+  damage: { name: 'Hot loads', icon: '▲', cap: 3, color: '#ff8b70', description: '+damage & impact stagger' },
   pierce: { name: 'Piercing rounds', icon: '»', cap: 2, color: '#ffb36c', description: '+1 target per shot' },
   reload: { name: 'Speed loader', icon: '↻', cap: 3, color: '#f1cd86', description: '15% faster reload' },
   capacity: { name: 'Extended Capacity', icon: '▤', cap: 3, color: '#e2d18d', description: 'Larger firearm magazine' },
 };
 
-export const ARENA_UPGRADES = {
-  ...UPGRADES,
-  light: { name: 'Focus Optics', icon: '☀', cap: 5, color: '#ffe5a3', description: '+flashlight reach & brightness' },
-};
-
 export const LOOT = {
-  ...ARENA_UPGRADES,
+  ...UPGRADES,
   ammo: { name: 'Spare rounds', icon: '⋮', color: '#bac5b8' },
   pistol: { name: 'Service pistol', icon: 'pistol', color: '#f0cc91' },
   shotgun: { name: 'Pump shotgun', icon: 'shotgun', color: '#ffd299' },
@@ -52,10 +46,8 @@ export const LOOT = {
 };
 
 const POINT = { x: 0, y: 0, z: -1 };
-const RESERVE_MAX = 120;
-const ARENA_RESERVE_MAX = 180;
-const FLASHLIGHT_RUNTIME = 30;
-const ARENA_FLASHLIGHT_RUNTIME = 15;
+const RESERVE_MAX = 180;
+const ARENA_RESERVE_MAX = 300;
 const MUZZLE_LIGHT_DURATION = 0.22;
 const MUZZLE_LIGHT_RANGE = 20;
 const DRY_SPARK_RANGE = 3.5;
@@ -71,14 +63,8 @@ export function isSupply(kind) {
   return kind === 'ammo';
 }
 
-export function beamSettings(mode = 'focus', run = null) {
+export function beamSettings(mode = 'focus') {
   const focus = mode === 'focus';
-  if (run?.mode === 'arena') {
-    const lvl = run.player?.upgrades?.light || 0;
-    const range = (focus ? 28 : 16) + lvl * (focus ? 3.5 : 2.2);
-    const powerScale = clamp((focus ? 1.05 : 0.72) + lvl * 0.16, 0.72, 1.85);
-    return { range, angle: focus ? 0.21 : 0.48, powerScale };
-  }
   return { range: focus ? 36 : 20, angle: focus ? 0.21 : 0.48, powerScale: focus ? 1.35 : 1.15 };
 }
 
@@ -279,8 +265,9 @@ function spawnWaveRewards(run, clearedWave) {
   };
 
   // Generous ammunition rewards
-  place('ammo', 10 + clearedWave * 2);
-  place('ammo', 8 + clearedWave * 2);
+  place('ammo', 16 + clearedWave * 4);
+  place('ammo', 14 + clearedWave * 4);
+  place('ammo', 12 + clearedWave * 3);
 
   // Better guns across early waves
   if (clearedWave === 1 && !Object.hasOwn(p.magazines, 'shotgun')) place('shotgun');
@@ -290,14 +277,15 @@ function spawnWaveRewards(run, clearedWave) {
 
   if (p.armor < 1 && clearedWave % 2 === 0) place('armor1');
 
-  // Incremental flashlight & weapon upgrades between waves
-  if ((p.upgrades.light || 0) < ARENA_UPGRADES.light.cap) {
-    place('light');
-  }
+  // Gun upgrades between every wave
   const weaponUpgradePool = ['damage', 'capacity', 'reload', 'pierce'].filter(u => (p.upgrades[u] || 0) < UPGRADES[u].cap);
   if (weaponUpgradePool.length) {
-    const pick = weaponUpgradePool[(clearedWave - 1 + Math.floor(run.rng() * weaponUpgradePool.length)) % weaponUpgradePool.length];
-    place(pick);
+    const first = weaponUpgradePool[(clearedWave - 1 + Math.floor(run.rng() * weaponUpgradePool.length)) % weaponUpgradePool.length];
+    place(first);
+    const secondPool = weaponUpgradePool.filter(u => u !== first);
+    if (secondPool.length) {
+      place(secondPool[Math.floor(run.rng() * secondPool.length)]);
+    }
   }
 }
 
@@ -308,8 +296,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
   const world = runMode === 'arena'
     ? createWorld(seed, { mode: 'arena', diameter: rules.diameter, cellSize: rules.cellSize })
     : createWorld(seed, { mode: 'labyrinth', mazeSize: rules.mazeSize, ammoScale: rules.ammoScale });
-  const upgradeMap = runMode === 'arena' ? ARENA_UPGRADES : UPGRADES;
-  const upgrades = Object.fromEntries(Object.keys(upgradeMap).map(k => [k, 0]));
+  const upgrades = Object.fromEntries(Object.keys(UPGRADES).map(k => [k, 0]));
   const magazines = { pistol: GUNS.pistol.capacities[0] };
 
   const run = {
@@ -333,7 +320,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
       magazines,
       get ammo() { return this.magazines[this.weapon]; },
       set ammo(value) { this.magazines[this.weapon] = value; },
-      reserve: runMode === 'arena' ? 28 : 20,
+      reserve: runMode === 'arena' ? 60 : 42,
       get equippedReserve() { return this.reserve; },
       set equippedReserve(value) { this.reserve = value; },
       armor: 0,
@@ -514,7 +501,11 @@ function eliminate(run, e, headshot) {
   });
   if (run.corpses.length > 20) run.corpses.shift();
   emit(run, 'kill', { ...enemyPose(e).torso, kind: e.kind, headshot });
-  if (run.rng() < 0.45) setLoot(run, 'ammo', e.x, e.z, undefined, 4 + Math.floor(run.rng() * 4));
+  const dropChance = run.mode === 'arena' ? (e.kind === 'brute' ? 1 : 0.80) : 0.65;
+  if (run.rng() < dropChance) {
+    const amount = run.mode === 'arena' ? 6 + Math.floor(run.rng() * 7) : 6 + Math.floor(run.rng() * 5);
+    setLoot(run, 'ammo', e.x, e.z, undefined, amount);
+  }
 }
 
 export function shoot(run, aim) {
@@ -586,8 +577,9 @@ export function shoot(run, aim) {
       enemyVoice(run, enemy, 'shriek');
 
       // Regular zombies: headshot = instant kill, body = 2-3 hits.
-      // Brutes (6 HP): 3 headshots (2 dmg each) or 6 body shots (1 dmg each).
-      const dmg = hit.head ? (enemy.kind === 'brute' ? 2 : enemy.hp) : 1;
+      // Brutes (6 HP): 3 headshots (2 dmg each) or 6 body shots (1 dmg each). Hot loads L2+ deals +1 dmg.
+      const bonus = Math.floor((p.upgrades.damage || 0) / 2);
+      const dmg = hit.head ? (enemy.kind === 'brute' ? 2 + bonus : enemy.hp) : 1 + bonus;
       enemy.hp -= dmg;
       emit(run, 'impact', { ...hit.point, surface: 'body' });
 
@@ -639,16 +631,13 @@ function takeLoot(run, confirm) {
       p.reserve += got;
       run.metrics.roundsPicked += got;
       take(run, l, '+' + got + ' rounds');
-    } else {
-      const upgradeTable = run.mode === 'arena' ? ARENA_UPGRADES : UPGRADES;
-      if (k in upgradeTable && p.upgrades[k] < upgradeTable[k].cap) {
-        p.upgrades[k]++;
-        run.metrics.upgrades++;
-        const effect = k === 'capacity'
-          ? magazineCapacity(p) + (p.weapon === 'shotgun' ? ' shells' : ' rounds')
-          : upgradeTable[k].description;
-        take(run, l, upgradeTable[k].name + ' · ' + effect);
-      }
+    } else if (k in UPGRADES && p.upgrades[k] < UPGRADES[k].cap) {
+      p.upgrades[k]++;
+      run.metrics.upgrades++;
+      const effect = k === 'capacity'
+        ? magazineCapacity(p) + (p.weapon === 'shotgun' ? ' shells' : ' rounds')
+        : UPGRADES[k].description;
+      take(run, l, UPGRADES[k].name + ' · ' + effect);
     }
   }
 
@@ -1247,7 +1236,6 @@ export function stepRun(run, input = {}, dt = STEP) {
 
 export function inventorySnapshot(run) {
   const p = run.player;
-  const upgradeMap = run.mode === 'arena' ? ARENA_UPGRADES : UPGRADES;
   return {
     mode: run.mode,
     wave: run.wave?.number || 0,
@@ -1263,7 +1251,7 @@ export function inventorySnapshot(run) {
     kills: p.kills,
     time: run.time,
     difficulty: run.rules.name,
-    upgrades: Object.entries(upgradeMap).map(([k, u]) => ({
+    upgrades: Object.entries(UPGRADES).map(([k, u]) => ({
       key: k,
       name: u.name,
       level: p.upgrades[k],

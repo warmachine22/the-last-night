@@ -356,10 +356,11 @@ export function createPresentation(scene, art, layouts) {
   scene.add(spark, muzzleBloom);
   const flashState = { muzzle, bounce: muzzleBounce, spark, bloom: muzzleBloom, shot: null };
 
-  // Lightweight volumetric light shaft & bloom sprites (lens glow + beam impact bloom)
+  // Lightweight forward-only volumetric light shaft & bloom sprites (lens glow + beam impact bloom)
+  // Negative X rotation maps cylinder base (-Y) to local +Z so mesh.lookAt() aims the cone forward cleanly.
   const shaftGeo = new THREE.CylinderGeometry(0.032, 1, 1, 18, 1, true);
   shaftGeo.translate(0, -0.5, 0);
-  shaftGeo.rotateX(Math.PI / 2);
+  shaftGeo.rotateX(-Math.PI / 2);
   const lampShaft = new THREE.Mesh(
     shaftGeo,
     new THREE.MeshBasicMaterial({
@@ -885,21 +886,21 @@ export function createPresentation(scene, art, layouts) {
       lastLamp.mode = beam.mode;
     }
 
-    // Volumetric shaft + lens & hotspot bloom scaled cleanly to hit surface distance
+    // Forward-only volumetric shaft + subtle lens & hotspot bloom scaled cleanly to hit surface distance
     const hit = world.raycast(beam.origin, beam.ray, beam.range, true);
-    const hitDist = hit ? Math.max(0.35, hit.t) : beam.range * 0.85;
-    const coneDist = Math.min(hitDist, focus ? 18 : 11);
-    const coneRadius = Math.tan(beam.angle) * coneDist * 0.72;
-    lampShaft.position.set(ox + rx * 0.05, oy + ry * 0.05, oz + rz * 0.05);
+    const hitDist = hit ? Math.max(0.45, hit.t) : beam.range * 0.85;
+    const coneDist = Math.max(0.25, Math.min(hitDist - 0.12, focus ? 18 : 11));
+    const coneRadius = Math.tan(beam.angle) * coneDist * 0.58;
+    lampShaft.position.set(ox + rx * 0.16, oy + ry * 0.16, oz + rz * 0.16);
     lampShaft.lookAt(ox + rx * 10, oy + ry * 10, oz + rz * 10);
     lampShaft.scale.set(coneRadius, coneRadius, coneDist);
-    lampShaft.material.opacity = clamp((focus ? 0.11 : 0.06) * scale * power, 0.03, 0.16);
-    lampShaft.visible = true;
+    lampShaft.material.opacity = clamp((focus ? 0.068 : 0.038) * scale * power, 0.02, 0.095);
+    lampShaft.visible = hitDist > 0.35;
 
     lampLensBloom.position.set(ox + rx * 0.04, oy + ry * 0.04, oz + rz * 0.04);
-    const lensSize = (focus ? 0.42 : 0.34) * clamp(scale, 0.7, 1.35);
+    const lensSize = (focus ? 0.24 : 0.20) * clamp(scale, 0.7, 1.25);
     lampLensBloom.scale.set(lensSize, lensSize, 1);
-    lampLensBloom.material.opacity = clamp((focus ? 0.48 : 0.34) * power, 0.15, 0.6);
+    lampLensBloom.material.opacity = clamp((focus ? 0.26 : 0.18) * power, 0.10, 0.32);
     lampLensBloom.visible = true;
 
     if (hit && hit.t <= beam.range) {

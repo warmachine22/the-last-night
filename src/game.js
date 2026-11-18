@@ -698,7 +698,7 @@ function xrUI(sample, trackedView) {
         lines: isArena ? [
           `Mode: Fight in Tight Space (B switches)   ·   Size: ${sizeLabel} (X changes)`,
           '6-door hexagonal room whose floor cubes shift every 30s — zero cutoffs!',
-          'Infinite bright narrow-cone flashlight + wave upgrades, ammo & better guns.',
+          'Infinite bright narrow-cone flashlight + wave gun upgrades, abundant ammo & better guns.',
           'Survive as many rounds as possible!',
         ] : [
           `Mode: Labyrinth Escape (B switches)   ·   ${sizeLabel} (X changes)`,

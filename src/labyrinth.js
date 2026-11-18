@@ -424,10 +424,10 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
       }
     }
 
-    // Scavenged Ammo & occasional Shotgun / Carbine pickups
+    // Scavenged Ammo & Gun Upgrades + occasional Shotgun / Carbine pickups
     if (z.kind === 'start') {
-      lootSites.push({ id: 'loot:start-ammo', kind: 'ammo', x: z.center.x + 1.6, z: z.center.z - 1.6, amount: Math.max(4, Math.round(6 * ammoScale)), name: 'Reserve Ammo' });
-    } else if (z.kind === 'room' && rng() < 0.46 * ammoScale) {
+      lootSites.push({ id: 'loot:start-ammo', kind: 'ammo', x: z.center.x + 1.6, z: z.center.z - 1.6, amount: Math.max(8, Math.round(14 * ammoScale)), name: 'Reserve Ammo' });
+    } else if (z.kind === 'room' && rng() < Math.min(0.85, 0.65 * ammoScale)) {
       const cell = z.cells[Math.floor(rng() * z.cells.length)];
       const pt = cellCenter(cell[0], cell[1]);
       lootSites.push({
@@ -435,15 +435,15 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
         kind: 'ammo',
         x: pt.x,
         z: pt.z,
-        amount: Math.max(4, Math.round((5 + rng() * 6) * ammoScale)),
+        amount: Math.max(6, Math.round((8 + rng() * 8) * ammoScale)),
         name: 'Ammo Box',
       });
     }
   }
 
-  // Place 1 Pump Shotgun & 1 Ranger Carbine in distant non-start, non-exit rooms
+  // Place 1 Pump Shotgun, 1 Ranger Carbine, and firearm upgrade pickups in distant non-start, non-exit rooms
   const weaponRooms = zones
-    .filter(z => z.kind === 'room' && z.distFromStart >= 4)
+    .filter(z => z.kind === 'room' && z.distFromStart >= 3)
     .sort((a, b) => b.distFromStart - a.distFromStart);
   if (weaponRooms[0]) {
     lootSites.push({ id: 'loot:shotgun', kind: 'shotgun', x: weaponRooms[0].center.x, z: weaponRooms[0].center.z, amount: 0, name: 'Pump shotgun' });
@@ -451,6 +451,16 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
   if (weaponRooms[Math.min(2, weaponRooms.length - 1)] && weaponRooms.length > 1) {
     const r2 = weaponRooms[Math.min(2, weaponRooms.length - 1)];
     lootSites.push({ id: 'loot:carbine', kind: 'carbine', x: r2.center.x, z: r2.center.z, amount: 0, name: 'Ranger carbine' });
+  }
+  const upgradeKinds = ['damage', 'capacity', 'reload', 'pierce'];
+  const upgradeSlots = Math.min(weaponRooms.length, Math.max(4, Math.round(cols / 6)));
+  for (let u = 0; u < upgradeSlots; u++) {
+    const room = weaponRooms[Math.floor(((u + 1) * weaponRooms.length) / (upgradeSlots + 1))];
+    if (!room) continue;
+    const kind = upgradeKinds[u % upgradeKinds.length];
+    const cell = room.cells[Math.floor(rng() * room.cells.length)];
+    const pt = cellCenter(cell[0], cell[1]);
+    lootSites.push({ id: `loot:up:${u}:${kind}`, kind, x: pt.x, z: pt.z, amount: 0, name: kind });
   }
 
   const zoneAt = (wx, wz) => {

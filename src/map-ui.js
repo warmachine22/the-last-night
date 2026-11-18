@@ -42,13 +42,13 @@ export function drawFieldMapAndInventory(ctx, width, height, run, hint = '', sec
 
   ctx.fillStyle = '#9aa89b';
   ctx.font = '17px monospace';
+  const ups = snap.upgrades.filter(u => u.level > 0).map(u => `${u.name} Lv${u.level}`).join(' · ') || 'None yet';
   if (snap.mode === 'arena') {
-    const lightLvl = snap.upgrades.find(u => u.key === 'light')?.level || 0;
-    ctx.fillText(`6-Sided Shifting Arena (shift every 30s) · Focus Optics ${lightLvl}/5.`, 44, height - 108);
-    ctx.fillText('Survive doorway bursts and collect guns, ammo & upgrades between waves.', 44, height - 80);
+    ctx.fillText(`Gun Upgrades: ${ups}`, 44, height - 108);
+    ctx.fillText('Survive 6-door bursts and collect guns, ammo & gun upgrades between waves.', 44, height - 80);
   } else {
-    ctx.fillText('Use your bright narrow-cone flashlight & gunfire carefully. Avoid hazards.', 44, height - 108);
-    ctx.fillText('Find the single perimeter EXIT chamber while keeping spare rounds.', 44, height - 80);
+    ctx.fillText(`Gun Upgrades: ${ups}`, 44, height - 108);
+    ctx.fillText('Find the single perimeter EXIT chamber while gathering ammo & gun upgrades.', 44, height - 80);
   }
 
   if (hint) {

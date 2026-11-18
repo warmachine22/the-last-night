@@ -15,7 +15,7 @@ function advance(run, seconds, input = {}) {
 }
 
 test('all three difficulty maze sizes (78m, 114m, 156m) have high ceilings, mix of tight and big spaces, and one exit', () => {
-  assert.equal(BUILD, '2.4.1');
+  assert.equal(BUILD, '2.4.2');
   assert.equal(CHUNK, 24);
   assert.equal(MAX_ACTIVE_ZOMBIES, 18);
   assert.ok(LABYRINTH_HEIGHT >= 4.0, `ceiling height should be tall (>=4.0m), got ${LABYRINTH_HEIGHT}`);
@@ -204,13 +204,12 @@ test('Fight in Tight Space mode builds a 6-sided 6-door arena with connected pat
       assert.equal(arena.allZonesConnected(blockedSet, pTile, reqTiles), true, `${sizeKey} shift ${s} partitioned arena!`);
     }
 
-    // Flashlight starts brighter with long narrow focus beam and upgrades incrementally
+    // One standard bright infinite narrow beam across modes (no flashlight upgrade)
     const lampAim = { origin: { x: 0, y: 1.4, z: 0 }, ray: { x: 0, y: 0, z: -1 } };
-    const arenaBeam0 = resolvePlayerBeam(arenaRun, lampAim, { x: 0, y: 1.63, z: 0 });
-    assert.ok(arenaBeam0.range >= 28 && arenaBeam0.angle <= 0.25 && arenaBeam0.powerScale >= 1.0);
-    arenaRun.player.upgrades.light = 3;
-    const arenaBeamUp = resolvePlayerBeam(arenaRun, lampAim, { x: 0, y: 1.63, z: 0 });
-    assert.ok(arenaBeamUp.range > arenaBeam0.range && arenaBeamUp.powerScale > arenaBeam0.powerScale);
+    const arenaBeam = resolvePlayerBeam(arenaRun, lampAim, { x: 0, y: 1.63, z: 0 });
+    assert.ok(arenaBeam.range >= 32 && arenaBeam.angle <= 0.25 && arenaBeam.powerScale >= 1.2);
+    assert.equal('light' in UPGRADES, false);
+    assert.ok(arenaRun.player.reserve >= 50, 'arena should start with generous reserve ammo');
   }
 
   // Test doorway pathfinding: spawn a zombie at EVERY one of the 6 doorway alcoves and verify it walks into the room to player
@@ -289,11 +288,14 @@ test('Fight in Tight Space mode builds a 6-sided 6-door arena with connected pat
   assert.ok(raisedCount >= 2, `raised floor cubes should reach ceiling height, got ${raisedCount}`);
   assert.equal(run.world.blocks(run.player.x, run.player.z, 0.27), false, 'shifting floor must never trap the player');
 
-  // Clear remaining wave enemies and verify waveClear rewards (ammo + shotgun + light upgrade) spawn
+  // Clear remaining wave enemies and verify abundant ammo + shotgun + gun upgrades spawn (no flashlight upgrade)
   run.wave.queue = [];
   for (const e of run.roster) e.dead = true;
   run.enemies = [];
   const clearEv = advance(run, 0.2, {});
   assert.ok(clearEv.some(e => e.type === 'waveClear'));
-  assert.ok(run.loot.some(l => l.kind === 'ammo') && run.loot.some(l => l.kind === 'light') && run.loot.some(l => l.kind === 'shotgun'));
+  assert.equal(run.loot.some(l => l.kind === 'light'), false, 'flashlight upgrade should not spawn');
+  assert.ok(run.loot.filter(l => l.kind === 'ammo').length >= 3, 'multiple generous ammo pickups should spawn between waves');
+  assert.ok(run.loot.some(l => l.kind in UPGRADES), 'gun upgrades should spawn between waves');
+  assert.ok(run.loot.some(l => l.kind === 'shotgun'));
 });
