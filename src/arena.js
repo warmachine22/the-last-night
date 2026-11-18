@@ -67,7 +67,7 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
   const sideLen = 2 * apothem * Math.tan(Math.PI / 6);
   const doorHalf = ARENA_DOOR_WIDTH / 2;
   const wallThickness = 0.28;
-  const alcoveDepth = 2.6;
+  const alcoveDepth = 3.2;
 
   // 6 hexagon faces (apothem normals at 30°, 90°, 150°, 210°, 270°, 330°)
   const faces = Array.from({ length: 6 }, (_, i) => {
@@ -85,8 +85,8 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
       tz,
       cx: nx * apothem,
       cz: nz * apothem,
-      spawnX: nx * (apothem + 1.55),
-      spawnZ: nz * (apothem + 1.55),
+      spawnX: nx * (apothem + 1.15),
+      spawnZ: nz * (apothem + 1.15),
       entryX: nx * Math.max(2, apothem - cellSize * 0.9),
       entryZ: nz * Math.max(2, apothem - cellSize * 0.9),
       yaw: Math.atan2(-nx, nz),
@@ -116,9 +116,10 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
     for (let c = 0; c < cols; c++) {
       const cx = minX + (c + 0.5) * cellSize;
       const cz = minZ + (r + 0.5) * cellSize;
-      if (!insideHex(cx, cz, cubeMargin)) continue;
+      if (!insideHex(cx, cz, 0.08)) continue;
       const nearDoor = faces.some(f => Math.hypot(cx - f.cx, cz - f.cz) < cellSize * 1.15);
       const nearCenter = Math.hypot(cx, cz) < cellSize * 0.85;
+      const canRaise = insideHex(cx, cz, cubeMargin) && !nearDoor;
       const tile = {
         id: tiles.length,
         c,
@@ -130,6 +131,7 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
         targetHeight: 0,
         nearDoor,
         nearCenter,
+        canRaise,
         solid: false,
       };
       tileGrid[r][c] = tile;
@@ -146,6 +148,22 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
     const [c, r] = worldToCell(wx, wz);
     return tileGrid[r]?.[c] || null;
   };
+
+  function nearestWalkableTile(wx, wz, blockedSet = null) {
+    const direct = tileAt(wx, wz);
+    if (direct && !direct.solid && (!blockedSet || !blockedSet.has(direct.id))) return direct;
+    let best = null;
+    let bestDist = Infinity;
+    for (const t of tiles) {
+      if (t.solid || (blockedSet && blockedSet.has(t.id))) continue;
+      const d = (t.x - wx) ** 2 + (t.z - wz) ** 2;
+      if (d < bestDist) {
+        bestDist = d;
+        best = t;
+      }
+    }
+    return best;
+  }
 
   // Pre-build wall / doorway jamb / alcove colliders for rendering & raycasting
   const wallSegments = [];
@@ -210,8 +228,9 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
     }
   }
 
-  // BFS reachability check ensuring player & all 6 doorway entries stay mutually connected
-  function allDoorsReachable(blockedSet, originTile) {
+  // BFS reachability check BEFORE shifting: verifies player, every living zombie,
+  // and all 6 doorway entries belong to one connected partition with zero blocked pockets.
+  function allZonesConnected(blockedSet, originTile, requiredTiles) {
     if (!originTile || blockedSet.has(originTile.id)) return false;
     const seen = new Set([originTile.id]);
     const queue = [originTile];
@@ -224,17 +243,19 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
         queue.push(next);
       }
     }
-    return faces.every(f => {
-      const dt = tileAt(f.entryX, f.entryZ);
-      return !dt || seen.has(dt.id);
-    });
+    for (const req of requiredTiles) {
+      if (req && !seen.has(req.id)) return false;
+    }
+    return true;
   }
 
   // Picks unoccupied multi-cube formations (2, 3, or 4 consecutive blocks / L-shapes)
-  // while leaving tiles under the player, any zombie, or doorway openings completely clear.
+  // while leaving tiles under the player, any zombie, or doorway openings completely clear
+  // and pre-validating full room reachability so raised blocks never partition the arena.
   function shiftLayout(occupants = [], initial = false) {
     const halfTile = cellSize / 2;
     const occupied = new Set();
+    const requiredTiles = [];
     for (const occ of occupants) {
       const pad = occ.radius ?? 0.55;
       for (const t of tiles) {
@@ -242,21 +263,35 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
           occupied.add(t.id);
         }
       }
+      if (insideHex(occ.x, occ.z, 0)) {
+        const ot = nearestWalkableTile(occ.x, occ.z);
+        if (ot) requiredTiles.push(ot);
+      }
+    }
+    for (const f of faces) {
+      const dt = nearestWalkableTile(f.entryX, f.entryZ);
+      if (dt) requiredTiles.push(dt);
     }
 
+    const originTile = requiredTiles[0] || nearestWalkableTile(0, 0);
     const chosen = new Set();
-    const budget = Math.max(3, Math.round(tiles.length * (initial ? 0.20 : 0.27)));
-    const candidatePool = tiles.filter(t => !t.nearDoor && !(initial && t.nearCenter) && !occupied.has(t.id));
+    const raisePool = tiles.filter(t => t.canRaise && !(initial && t.nearCenter) && !occupied.has(t.id));
+    const budget = Math.max(3, Math.round(raisePool.length * (initial ? 0.22 : 0.30)));
 
-    for (let i = candidatePool.length - 1; i > 0; i--) {
+    for (let i = raisePool.length - 1; i > 0; i--) {
       const j = Math.floor(rng() * (i + 1));
-      [candidatePool[i], candidatePool[j]] = [candidatePool[j], candidatePool[i]];
+      [raisePool[i], raisePool[j]] = [raisePool[j], raisePool[i]];
     }
 
-    const originTile = tiles.find(t => !t.nearCenter && !occupied.has(t.id)) || tiles[0];
     const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const diagAndOrth = [];
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        if (dc || dr) diagAndOrth.push([dc, dr]);
+      }
+    }
 
-    for (const seedTile of candidatePool) {
+    for (const seedTile of raisePool) {
       if (chosen.size >= budget) break;
       if (chosen.has(seedTile.id)) continue;
 
@@ -267,32 +302,31 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
       let cur = seedTile;
       for (let step = 1; step < len; step++) {
         if (step >= 2 && rng() < 0.42) {
-          // Turn 90 degrees for L-shape / corner cover
           [dc, dr] = rng() < 0.5 ? [-dr, dc] : [dr, -dc];
         }
         const next = tileGrid[cur.r + dr]?.[cur.c + dc];
-        if (!next || next.nearDoor || (initial && next.nearCenter) || occupied.has(next.id) || chosen.has(next.id)) break;
+        if (!next || !next.canRaise || (initial && next.nearCenter) || occupied.has(next.id) || chosen.has(next.id)) break;
         if (shape.includes(next)) break;
         shape.push(next);
         cur = next;
       }
 
       if (shape.length < 2) continue;
-      // Avoid clustering right next to another raised shape so tight alleys stay walkable
-      const touchesChosen = shape.some(s => dirs.some(([x, y]) => {
+      // 8-connected spacing check so shapes never pinch diagonally or seal off sightlines/alleys
+      const touchesChosen = shape.some(s => diagAndOrth.some(([x, y]) => {
         const nb = tileGrid[s.r + y]?.[s.c + x];
         return nb && chosen.has(nb.id) && !shape.includes(nb);
       }));
       if (touchesChosen) continue;
 
       for (const s of shape) chosen.add(s.id);
-      if (!allDoorsReachable(chosen, originTile)) {
+      if (!allZonesConnected(chosen, originTile, requiredTiles)) {
         for (const s of shape) chosen.delete(s.id);
       }
     }
 
     for (const t of tiles) {
-      t.targetHeight = chosen.has(t.id) ? ARENA_HEIGHT : 0;
+      t.targetHeight = t.canRaise && chosen.has(t.id) ? ARENA_HEIGHT : 0;
     }
     return chosen.size;
   }
@@ -418,19 +452,28 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
   }
 
   function findStep(fromPos, toPos) {
-    const [sc, sr] = worldToCell(fromPos.x, fromPos.z);
-    const [tc, tr] = worldToCell(toPos.x, toPos.z);
+    // Zombies inside an exterior doorway alcove first walk cleanly inward through their open door
+    for (const f of faces) {
+      if (fromPos.x * f.nx + fromPos.z * f.nz > apothem - 0.15) {
+        return { x: f.entryX, z: f.entryZ };
+      }
+    }
+
+    const startTile = nearestWalkableTile(fromPos.x, fromPos.z);
+    const goalTile = nearestWalkableTile(toPos.x, toPos.z);
+    if (!startTile || !goalTile) return toPos;
+    const sc = startTile.c, sr = startTile.r;
+    const tc = goalTile.c, tr = goalTile.r;
     if (sc === tc && sr === tr) return toPos;
-    const startTile = tileGrid[sr]?.[sc];
-    if (!startTile) return toPos;
 
     const key = (c, r) => r * cols + c;
     const goalKey = key(tc, tr);
     const queue = [[sc, sr]];
     const parent = new Map([[key(sc, sr), null]]);
+    const maxNodes = rows * cols + 16;
 
     let found = false;
-    for (let head = 0; head < queue.length && queue.length < 180; head++) {
+    for (let head = 0; head < queue.length && queue.length < maxNodes; head++) {
       const [c, r] = queue[head];
       if (key(c, r) === goalKey) { found = true; break; }
       for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
@@ -463,6 +506,8 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
     t.solid = t.height >= 0.45;
   }
 
+  const raiseTiles = tiles.filter(t => t.canRaise);
+
   return {
     diameter,
     apothem,
@@ -473,6 +518,7 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
     rows,
     faces,
     tiles,
+    raiseTiles,
     tileGrid,
     wallSegments,
     start: { x: 0, z: 0 },
@@ -483,5 +529,6 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
     raycast,
     findStep,
     tileAt,
+    allZonesConnected,
   };
 }

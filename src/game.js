@@ -30,7 +30,7 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 1.4));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.07;
+renderer.toneMappingExposure = 1.18;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.xr.enabled = true;
@@ -697,12 +697,12 @@ function xrUI(sample, trackedView) {
         title: 'The Last Night',
         lines: isArena ? [
           `Mode: Fight in Tight Space (B switches)   ·   Size: ${sizeLabel} (X changes)`,
-          '6-door hexagonal room whose floor cubes shift every 30s — avoid getting cornered!',
-          'Start with a dimmer flashlight; survive doorway bursts to earn guns, ammo & upgrades.',
+          '6-door hexagonal room whose floor cubes shift every 30s — zero cutoffs!',
+          'Infinite bright narrow-cone flashlight + wave upgrades, ammo & better guns.',
           'Survive as many rounds as possible!',
         ] : [
           `Mode: Labyrinth Escape (B switches)   ·   ${sizeLabel} (X changes)`,
-          'Fixed 30s flashlight + bright muzzle light to reveal fast ambushers.',
+          'Infinite bright flashlight + muzzle bloom to reveal fast ambushers.',
           'Headshots kill regulars (2-3 body). Brutes take 3 head / 6 body. Zombies ambush from behind!',
           'Manage scarce ammo and escape through the single perimeter EXIT.',
         ],

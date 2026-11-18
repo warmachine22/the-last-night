@@ -9,7 +9,7 @@ import { findMazeStep, MAX_PURSUIT_PLAYER_DIST, MAX_TETHER_FROM_HOME, updateHord
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '2.3.0';
+export const BUILD = '2.4.0';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [12, 16, 20, 24], reload: 1.45, interval: 0.28, range: 48, damage: 1, noise: 22, rounds: 1, spread: 0 },
@@ -38,7 +38,7 @@ export const UPGRADES = {
 
 export const ARENA_UPGRADES = {
   ...UPGRADES,
-  light: { name: 'Flashlight Cell', icon: '☀', cap: 5, color: '#ffe5a3', description: '+flashlight range, power & runtime' },
+  light: { name: 'Focus Optics', icon: '☀', cap: 5, color: '#ffe5a3', description: '+flashlight reach & brightness' },
 };
 
 export const LOOT = {
@@ -71,15 +71,15 @@ export function isSupply(kind) {
   return kind === 'ammo';
 }
 
-export function beamSettings(mode = 'wide', run = null) {
+export function beamSettings(mode = 'focus', run = null) {
   const focus = mode === 'focus';
   if (run?.mode === 'arena') {
     const lvl = run.player?.upgrades?.light || 0;
-    const range = (focus ? 10.5 : 7.5) + lvl * (focus ? 2.2 : 1.6);
-    const powerScale = clamp(0.34 + lvl * 0.13, 0.34, 1.0);
-    return { range, angle: focus ? 0.25 : 0.49, powerScale };
+    const range = (focus ? 28 : 16) + lvl * (focus ? 3.5 : 2.2);
+    const powerScale = clamp((focus ? 1.05 : 0.72) + lvl * 0.16, 0.72, 1.85);
+    return { range, angle: focus ? 0.21 : 0.48, powerScale };
   }
-  return { range: focus ? 22 : 15, angle: focus ? 0.25 : 0.49, powerScale: 1.0 };
+  return { range: focus ? 36 : 20, angle: focus ? 0.21 : 0.48, powerScale: focus ? 1.35 : 1.15 };
 }
 
 export function activeBeams(run) {
@@ -312,7 +312,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
       reload: null,
       flashlight: true,
       battery: 1,
-      beam: 'wide',
+      beam: 'focus',
       upgrades,
       kills: 0,
       headshots: 0,
@@ -1063,6 +1063,7 @@ function stepArenaState(run, dt) {
     arena.shiftLayout(occupants, false);
     arenaShift.version++;
     arenaShift.nextAt = run.time + ARENA_SHIFT_INTERVAL;
+    for (const e of run.enemies) e._mazeNav = null;
     emit(run, 'earthShift', { x: p.x, y: p.y, z: p.z, version: arenaShift.version });
   }
   arenaShift.moving = arena.stepAnimation(dt);
@@ -1090,8 +1091,8 @@ function stepArenaState(run, dt) {
       if (burst.length === 0) wave.queue.shift();
       for (const spec of batch) {
         const face = arena.faces[spec.doorIdx % 6];
-        const side = (run.rng() - 0.5) * 0.9;
-        const back = 0.25 + run.rng() * 0.85;
+        const side = (run.rng() - 0.5) * 0.55;
+        const back = run.rng() * 0.45;
         const sx = face.spawnX + face.tx * side + face.nx * back;
         const sz = face.spawnZ + face.tz * side + face.nz * back;
         const zombie = addEnemy(run, spec.kind, sx, sz, { yaw: face.yaw, dormant: false });
@@ -1140,20 +1141,9 @@ export function stepRun(run, input = {}, dt = STEP) {
   if (input.cycleWeapon) cycleWeapon(run);
   inspectFlashlights(run, input);
 
-  // Labyrinth: fixed non-upgradable 30s flashlight. Tight Space Arena: dim 15s base scaling up with upgrades.
-  const runtime = run.mode === 'arena'
-    ? ARENA_FLASHLIGHT_RUNTIME + (p.upgrades.light || 0) * 3.5
-    : FLASHLIGHT_RUNTIME;
+  // Continuous infinite flashlight charge (never depletes; toggle on/off or wide/focus anytime)
+  p.battery = 1;
   const activeLight = p.flashlight && p.beam !== 'off' && !input.lampUnavailable;
-  if (activeLight) {
-    p.battery = Math.max(0, p.battery - dt / runtime);
-    if (p.battery === 0) {
-      p.flashlight = false;
-      emit(run, 'light', { on: false, empty: true });
-    }
-  } else {
-    p.battery = Math.min(1, p.battery + dt / 5);
-  }
 
   if (world.arena) stepArenaState(run, dt);
 

@@ -44,10 +44,10 @@ export function drawFieldMapAndInventory(ctx, width, height, run, hint = '', sec
   ctx.font = '17px monospace';
   if (snap.mode === 'arena') {
     const lightLvl = snap.upgrades.find(u => u.key === 'light')?.level || 0;
-    ctx.fillText(`6-Sided Shifting Arena (shift every 30s) · Flashlight Level ${lightLvl}/5.`, 44, height - 108);
+    ctx.fillText(`6-Sided Shifting Arena (shift every 30s) · Focus Optics ${lightLvl}/5.`, 44, height - 108);
     ctx.fillText('Survive doorway bursts and collect guns, ammo & upgrades between waves.', 44, height - 80);
   } else {
-    ctx.fillText('Use your fixed 30s flashlight wisely. Avoid puddles, pebbles & dry branches.', 44, height - 108);
+    ctx.fillText('Use your bright narrow-cone flashlight & gunfire carefully. Avoid hazards.', 44, height - 108);
     ctx.fillText('Find the single perimeter EXIT chamber while keeping spare rounds.', 44, height - 80);
   }
 

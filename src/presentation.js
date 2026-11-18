@@ -49,16 +49,33 @@ const enemyModels = Object.keys(ENEMIES).flatMap(kind => [kind, kind + '-alt']);
 const modelNames = [...Object.keys(GUNS), 'flashlight', 'glove', ...enemyModels];
 
 function makeLamp(map = beamTexture()) {
-  const lamp = new THREE.SpotLight(0xffedd2, 0, 18, 0.49, 0.78, 2);
+  const lamp = new THREE.SpotLight(0xfff1d8, 0, 36, 0.21, 0.62, 1.3);
   lamp.map = map;
   lamp.castShadow = true;
   lamp.shadow.autoUpdate = false;
   lamp.shadow.mapSize.set(512, 512);
   lamp.shadow.camera.near = 0.06;
-  lamp.shadow.camera.far = 30;
+  lamp.shadow.camera.far = 48;
   lamp.shadow.bias = -0.00019;
   lamp.shadow.normalBias = 0.028;
   return lamp;
+}
+
+function shaftTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 4;
+  canvas.height = 64;
+  const g = canvas.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 64);
+  grad.addColorStop(0, 'rgba(255,244,218,0.85)');
+  grad.addColorStop(0.28, 'rgba(255,232,190,0.42)');
+  grad.addColorStop(0.72, 'rgba(255,216,162,0.12)');
+  grad.addColorStop(1, 'rgba(255,204,142,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 4, 64);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 export async function loadArt(legacyMotion = false) {
   const source = await Promise.all(modelNames.map(name =>
@@ -284,8 +301,41 @@ export function createPresentation(scene, art, layouts) {
     map: burst, color: 0xffcf87, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
   }));
   spark.visible = false;
-  scene.add(spark);
-  const flashState = { muzzle, bounce: muzzleBounce, spark, shot: null };
+  const muzzleBloom = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glow, color: 0xffc682, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.48, toneMapped: false,
+  }));
+  muzzleBloom.visible = false;
+  scene.add(spark, muzzleBloom);
+  const flashState = { muzzle, bounce: muzzleBounce, spark, bloom: muzzleBloom, shot: null };
+
+  // Lightweight volumetric light shaft & bloom sprites (lens glow + beam impact bloom)
+  const shaftGeo = new THREE.CylinderGeometry(0.032, 1, 1, 18, 1, true);
+  shaftGeo.translate(0, -0.5, 0);
+  shaftGeo.rotateX(Math.PI / 2);
+  const lampShaft = new THREE.Mesh(
+    shaftGeo,
+    new THREE.MeshBasicMaterial({
+      map: shaftTexture(),
+      color: 0xffe6bd,
+      transparent: true,
+      opacity: 0.09,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    }),
+  );
+  lampShaft.visible = false;
+  lampShaft.frustumCulled = false;
+  const lampLensBloom = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glow, color: 0xfff0d2, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.42, toneMapped: false,
+  }));
+  lampLensBloom.visible = false;
+  const lampSpotBloom = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glow, color: 0xffdfad, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.24, toneMapped: false,
+  }));
+  lampSpotBloom.visible = false;
+  scene.add(lampShaft, lampLensBloom, lampSpotBloom);
 
   const weaponMount = new THREE.Group();
   const lampMount = new THREE.Group();
@@ -396,10 +446,10 @@ export function createPresentation(scene, art, layouts) {
     }
     wallMesh?.computeBoundingSphere();
 
-    pillarMesh = instance(group, baseBox, surfaces.wall, arena.tiles.length, true, true);
+    pillarMesh = instance(group, baseBox, surfaces.wall, arena.raiseTiles.length, true, true);
     if (pillarMesh) {
       pillarMesh.frustumCulled = false;
-      for (let i = 0; i < arena.tiles.length; i++) {
+      for (let i = 0; i < arena.raiseTiles.length; i++) {
         pillarMesh.setColorAt(i, new THREE.Color(0x45494e));
       }
     }
@@ -414,8 +464,8 @@ export function createPresentation(scene, art, layouts) {
     if (!force && !moving && ver === lastArenaShiftVersion) return;
     lastArenaShiftVersion = ver;
     const pad = arena.cellSize * 0.94;
-    for (let i = 0; i < arena.tiles.length; i++) {
-      const t = arena.tiles[i];
+    for (let i = 0; i < arena.raiseTiles.length; i++) {
+      const t = arena.raiseTiles[i];
       const h = t.height > 0.04 ? t.height : 0.04;
       const y = t.height > 0.04 ? h / 2 : -0.005;
       place(pillarMesh, i, t.x, y, t.z, pad, h, pad, 0);
@@ -720,7 +770,7 @@ export function createPresentation(scene, art, layouts) {
     if (breech) breech.rotation.x = -1.03 * dip;
     updateFlash(flashState, currentRun.world, dt, settings, active);
     const power = 0.72 + 0.28 * clamp(p.battery / 0.16, 0, 1);
-    updateLamp(lamp, beam, power);
+    updateLamp(lamp, beam, power, currentRun.world);
     const litByLamp = lamp.intensity > 0 || calibration;
     if (artworkLit !== litByLamp) {
       artworkLit = litByLamp;
@@ -728,15 +778,24 @@ export function createPresentation(scene, art, layouts) {
     }
   }
 
-  function updateLamp(light, beam, power) {
-    if (!beam) { light.intensity = 0; lastLamp.active = false; return; }
+  function updateLamp(light, beam, power, world) {
+    if (!beam) {
+      light.intensity = 0;
+      lastLamp.active = false;
+      lampShaft.visible = false;
+      lampLensBloom.visible = false;
+      lampSpotBloom.visible = false;
+      return;
+    }
     const ox = beam.origin.x, oy = beam.origin.y, oz = beam.origin.z;
     const rx = beam.ray.x, ry = beam.ray.y, rz = beam.ray.z;
+    const focus = beam.mode === 'focus';
+    const scale = beam.powerScale ?? 1;
     light.position.set(ox, oy, oz);
     light.target.position.set(ox + rx, oy + ry, oz + rz);
     light.angle = beam.angle;
     light.distance = beam.range;
-    light.intensity = (beam.mode === 'focus' ? 460 : 300) * power * (beam.powerScale ?? 1);
+    light.intensity = (focus ? 760 : 440) * power * scale;
     const moved = !lastLamp.active || lastLamp.mode !== beam.mode || shadowDirty
       || Math.abs(ox - lastLamp.ox) + Math.abs(oy - lastLamp.oy) + Math.abs(oz - lastLamp.oz) > 0.015
       || Math.abs(rx - lastLamp.rx) + Math.abs(ry - lastLamp.ry) + Math.abs(rz - lastLamp.rz) > 0.008;
@@ -748,13 +807,43 @@ export function createPresentation(scene, art, layouts) {
       lastLamp.active = true;
       lastLamp.mode = beam.mode;
     }
+
+    // Volumetric shaft + lens & hotspot bloom scaled cleanly to hit surface distance
+    const hit = world.raycast(beam.origin, beam.ray, beam.range, true);
+    const hitDist = hit ? Math.max(0.35, hit.t) : beam.range * 0.85;
+    const coneDist = Math.min(hitDist, focus ? 18 : 11);
+    const coneRadius = Math.tan(beam.angle) * coneDist * 0.72;
+    lampShaft.position.set(ox + rx * 0.05, oy + ry * 0.05, oz + rz * 0.05);
+    lampShaft.lookAt(ox + rx * 10, oy + ry * 10, oz + rz * 10);
+    lampShaft.scale.set(coneRadius, coneRadius, coneDist);
+    lampShaft.material.opacity = clamp((focus ? 0.11 : 0.06) * scale * power, 0.03, 0.16);
+    lampShaft.visible = true;
+
+    lampLensBloom.position.set(ox + rx * 0.04, oy + ry * 0.04, oz + rz * 0.04);
+    const lensSize = (focus ? 0.42 : 0.34) * clamp(scale, 0.7, 1.35);
+    lampLensBloom.scale.set(lensSize, lensSize, 1);
+    lampLensBloom.material.opacity = clamp((focus ? 0.48 : 0.34) * power, 0.15, 0.6);
+    lampLensBloom.visible = true;
+
+    if (hit && hit.t <= beam.range) {
+      const pull = Math.max(0.2, hit.t - 0.25);
+      lampSpotBloom.position.set(ox + rx * pull, oy + ry * pull, oz + rz * pull);
+      const spotSize = clamp(0.85 + hit.t * Math.tan(beam.angle) * 0.75, 0.9, 5.2);
+      lampSpotBloom.scale.set(spotSize, spotSize, 1);
+      const fade = clamp(1 - hit.t / (beam.range * 1.1), 0.12, 1);
+      lampSpotBloom.material.opacity = clamp((focus ? 0.30 : 0.18) * fade * scale * power, 0.04, 0.42);
+      lampSpotBloom.visible = true;
+    } else {
+      lampSpotBloom.visible = false;
+    }
   }
 
   function updateFlash(flash, world, dt, settings, active) {
-    const { muzzle, bounce, spark, shot } = flash;
+    const { muzzle, bounce, spark, bloom, shot } = flash;
     muzzle.intensity = 0;
     bounce.intensity = 0;
     spark.visible = false;
+    bloom.visible = false;
     if (!active || !shot) { flash.shot = null; return; }
     const tuning = flashTuning[shot.weapon] || flashTuning.pistol;
     if (shot.elapsed >= tuning.duration) { flash.shot = null; return; }
@@ -780,6 +869,10 @@ export function createPresentation(scene, art, layouts) {
     spark.material.rotation = shot.elapsed * 11;
     spark.scale.set(0.38 * tuning.size, 0.27 * tuning.size, 1);
     spark.visible = spark.material.opacity > 0;
+    bloom.position.copy(o).addScaledVector(ray, shot.blocked ? 0 : 0.14);
+    bloom.scale.set(1.25 * tuning.size, 1.25 * tuning.size, 1);
+    bloom.material.opacity = fade * 0.45 * reduced;
+    bloom.visible = !shot.blocked && bloom.material.opacity > 0.01;
     shot.fresh = false;
     shot.elapsed += dt;
   }

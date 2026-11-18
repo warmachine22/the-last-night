@@ -15,7 +15,7 @@ function advance(run, seconds, input = {}) {
 }
 
 test('all three difficulty maze sizes (78m, 114m, 156m) have high ceilings, mix of tight and big spaces, and one exit', () => {
-  assert.equal(BUILD, '2.3.0');
+  assert.equal(BUILD, '2.4.0');
   assert.equal(CHUNK, 24);
   assert.equal(MAX_ACTIVE_ZOMBIES, 18);
   assert.ok(LABYRINTH_HEIGHT >= 4.0, `ceiling height should be tall (>=4.0m), got ${LABYRINTH_HEIGHT}`);
@@ -48,7 +48,7 @@ test('all three difficulty maze sizes (78m, 114m, 156m) have high ceilings, mix 
   }
 });
 
-test('non-upgradable 30s flashlight works, dry-fire sparks, spray can is removed, and zombies are 30% faster', () => {
+test('infinite brighter narrow-cone flashlight works, dry-fire sparks, spray can is removed, and zombies are 30% faster', () => {
   assert.equal('battery' in UPGRADES, false);
   assert.equal('lens' in UPGRADES, false);
   assert.equal('spraycan' in GUNS, false);
@@ -59,13 +59,13 @@ test('non-upgradable 30s flashlight works, dry-fire sparks, spray can is removed
   const flRun = createRun('fl-mode', { populate: false, difficulty: 'standard' });
   assert.equal('spraycan' in flRun.player.magazines, false);
   assert.equal(flRun.player.flashlight, true);
+  assert.equal(flRun.player.beam, 'focus');
   const lamp = { origin: { x: flRun.player.x, y: flRun.player.y + 1.4, z: flRun.player.z }, ray: { x: 0, y: 0, z: -1 } };
-  advance(flRun, 15, { lamp });
-  assert.ok(flRun.player.battery > 0.45 && flRun.player.battery < 0.55);
-  advance(flRun, 15.1, { lamp });
-  assert.equal(flRun.player.flashlight, false);
-  advance(flRun, 5.1, {});
-  assert.equal(flRun.player.battery, 1);
+  advance(flRun, 40, { lamp });
+  assert.equal(flRun.player.battery, 1, 'flashlight must never run out of charge');
+  assert.equal(flRun.player.flashlight, true);
+  const focusBeam = resolvePlayerBeam(flRun, lamp, { x: flRun.player.x, y: flRun.player.y + 1.63, z: flRun.player.z });
+  assert.ok(focusBeam.range >= 32 && focusBeam.angle <= 0.25 && focusBeam.powerScale > 1.1);
 
   flRun.player.ammo = 0;
   flRun.player.reserve = 0;
@@ -178,7 +178,7 @@ test('ground hazards (pebbles, branches, puddles) alert room zombies and reachin
   assert.equal(run.status, 'escaped');
 });
 
-test('Fight in Tight Space mode builds a 6-sided 6-door arena with selectable sizes, weaker starting flashlight, 30s shifting blocks, and wave rewards', () => {
+test('Fight in Tight Space mode builds a 6-sided 6-door arena with connected paths, reliable doorway pathfinding, and infinite bright narrow beam', () => {
   for (const [sizeKey, spec] of Object.entries(ARENA_SIZES)) {
     const arenaRun = createRun('arena-' + sizeKey, { mode: 'arena', arenaSize: sizeKey, populate: true });
     const arena = arenaRun.world.arena;
@@ -186,22 +186,47 @@ test('Fight in Tight Space mode builds a 6-sided 6-door arena with selectable si
     assert.equal(arena.faces.length, 6, 'arena must be 6-sided');
     assert.equal(arena.diameter, spec.diameter);
 
-    // Every doorway alcove allows zombie movement into the 6-sided chamber
+    // Every doorway alcove allows zombie movement into the 6-sided chamber & stays reachable
     for (const face of arena.faces) {
       assert.equal(arena.blocks(face.spawnX, face.spawnZ, 0.25, true), false, `doorway ${face.id} must be open for zombies`);
     }
 
-    // Flashlight starts significantly reduced compared to Labyrinth mode
-    const labRun = createRun('lab-cmp', { mode: 'labyrinth', populate: false });
+    // Repeated 30s layout shifts must NEVER create a complete partition blocking player from any doorway or zombie
+    for (let s = 0; s < 10; s++) {
+      const occ = [
+        { x: (s - 5) * 0.4, z: (s % 3 - 1) * 0.6, radius: 0.65 },
+        { x: arena.faces[s % 6].entryX, z: arena.faces[s % 6].entryZ, radius: 0.55 },
+      ];
+      arena.shiftLayout(occ, false);
+      const blockedSet = new Set(arena.tiles.filter(t => t.targetHeight > 0).map(t => t.id));
+      const pTile = arena.tileAt(occ[0].x, occ[0].z) || arena.tiles[0];
+      const reqTiles = arena.faces.map(f => arena.tileAt(f.entryX, f.entryZ));
+      assert.equal(arena.allZonesConnected(blockedSet, pTile, reqTiles), true, `${sizeKey} shift ${s} partitioned arena!`);
+    }
+
+    // Flashlight starts brighter with long narrow focus beam and upgrades incrementally
     const lampAim = { origin: { x: 0, y: 1.4, z: 0 }, ray: { x: 0, y: 0, z: -1 } };
     const arenaBeam0 = resolvePlayerBeam(arenaRun, lampAim, { x: 0, y: 1.63, z: 0 });
-    const labBeam = resolvePlayerBeam(labRun, lampAim, { x: 0, y: 1.63, z: 0 });
-    assert.ok(arenaBeam0.range < labBeam.range * 0.65 && arenaBeam0.powerScale < 0.5, 'arena flashlight should start dimmer and shorter range');
-
-    // Incremental flashlight upgrade increases beam reach & power
+    assert.ok(arenaBeam0.range >= 28 && arenaBeam0.angle <= 0.25 && arenaBeam0.powerScale >= 1.0);
     arenaRun.player.upgrades.light = 3;
     const arenaBeamUp = resolvePlayerBeam(arenaRun, lampAim, { x: 0, y: 1.63, z: 0 });
     assert.ok(arenaBeamUp.range > arenaBeam0.range && arenaBeamUp.powerScale > arenaBeam0.powerScale);
+  }
+
+  // Test doorway pathfinding: spawn a zombie at EVERY one of the 6 doorway alcoves and verify it walks into the room to player
+  const navRun = createRun('arena-nav', { mode: 'arena', arenaSize: 'medium', populate: false });
+  const navZombies = navRun.world.arena.faces.map(face => {
+    const z = addEnemy(navRun, 'shrieker', face.spawnX, face.spawnZ, { yaw: face.yaw, dormant: false });
+    z.alerted = true;
+    return z;
+  });
+  for (let i = 0; i < Math.round(14 / STEP); i++) {
+    navRun.player.protection = 1;
+    stepRun(navRun, {}, STEP);
+  }
+  for (const [idx, z] of navZombies.entries()) {
+    const dist = Math.hypot(z.x - navRun.player.x, z.z - navRun.player.z);
+    assert.ok(dist < 3.0, `zombie from doorway ${idx} failed to pathfind to player (ended ${dist.toFixed(1)}m away at ${z.x.toFixed(1)}, ${z.z.toFixed(1)})`);
   }
 
   // Wave bursts spawn from 6 doors, clearing Wave 1 spawns rewards + Wave 2, and t=30s shifts unoccupied floor cubes
@@ -209,10 +234,8 @@ test('Fight in Tight Space mode builds a 6-sided 6-door arena with selectable si
   const burstEvents = advance(run, 1.0, {});
   assert.ok(burstEvents.some(e => e.type === 'doorBurst') && run.enemies.length >= 1);
 
-  // Advance to 30s earthShift while checking standing player/zombie squares never crush anyone
   let sawShift = false;
   for (let i = 0; i < Math.round(31 / STEP); i++) {
-    // Keep player alive while testing 30s shift
     run.player.protection = 1;
     const ev = stepRun(run, {}, STEP);
     if (ev.some(e => e.type === 'earthShift')) {
@@ -221,7 +244,10 @@ test('Fight in Tight Space mode builds a 6-sided 6-door arena with selectable si
     }
   }
   assert.equal(sawShift, true, 'arena floor cubes must shift at 30 seconds');
-  advance(run, 2.0, {});
+  for (let i = 0; i < Math.round(2.0 / STEP); i++) {
+    run.player.protection = 1;
+    stepRun(run, {}, STEP);
+  }
   const raisedCount = run.world.arena.tiles.filter(t => t.height >= ARENA_HEIGHT * 0.9).length;
   assert.ok(raisedCount >= 2, `raised floor cubes should reach ceiling height, got ${raisedCount}`);
   assert.equal(run.world.blocks(run.player.x, run.player.z, 0.27), false, 'shifting floor must never trap the player');
