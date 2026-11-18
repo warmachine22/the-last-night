@@ -15,14 +15,17 @@
   <main id="shell">
     <header class="masthead">
       <strong>THE LAST NIGHT</strong>
-      <span id="build">BUILD 2.0.1</span>
+      <span id="build">BUILD 2.1.0</span>
     </header>
     <section class="hero" aria-labelledby="title" id="home">
       <p class="eyebrow">BLACKWATER LABYRINTH · WEBXR</p>
       <h1 id="title">THE LAST<br><span>NIGHT</span></h1>
-      <p class="lede">Start in the center of a dark labyrinth. Manage your fixed flashlight battery and scarce ammo.<br>Headshots kill regular zombies instantly; Brutes take 3 headshots or 6 body shots.</p>
+      <p class="lede">Start in the center of a pitch-black labyrinth. Choose <strong>Flashlight Mode</strong> (fixed 30s beam + scarce ammo) or <strong>No Light Mode</strong> (gunfire flash only + infinite bullets). Toggle your <strong>Spray Can</strong> to mark walls &amp; floors.</p>
       <label class="difficulty">Difficulty (Maze Size)
         <select id="difficulty"></select>
+      </label>
+      <label class="difficulty">Game Mode
+        <select id="mode"></select>
       </label>
       <div class="actions">
         <button id="start" class="primary" disabled>Generating labyrinth…</button>
@@ -45,12 +48,12 @@
         <button data-back>Back to menu</button>
       </div>
       <section class="help-section">
-        <h3>Flashlight &amp; Muzzle Fire</h3>
-        <p>You carry a non-upgradable 30-second flashlight (wide or focused beam) alongside bright weapon muzzle fire. Light and gunfire draw blind room zombies toward you—shut the light off and slip into dark corners to break pursuit.</p>
+        <h3>Game Modes &amp; Spray Can</h3>
+        <p><strong>Flashlight Mode</strong> gives a fixed, non-upgradable 30s flashlight with scarce scavenged ammo. <strong>No Light Mode</strong> removes the flashlight entirely but grants infinite reserve bullets—rely purely on muzzle flash illumination. Toggle the <strong>Spray Can</strong> (<code>Tab</code> / <code>Right B</code>) in either mode to spray neon marks onto walls and floors so you never lose your route.</p>
       </section>
       <section class="help-section">
-        <h3>Combat &amp; Room-Bound Threats</h3>
-        <p>1–5 zombies ambush inside each room and patrol corridors without crossing doorways. Regular zombies die from 1 headshot or 2–3 body shots; Brutes require 3 headshots or 6 body shots. Moving slowly avoids loud footsteps and alerts zombies inside that room far less.</p>
+        <h3>Ambush AI &amp; Combat</h3>
+        <p>1–5 zombies hide silently in concealed corners—wait for you to pass a doorway or step inside, then ambush from behind and chase briefly out of their room before returning if you sprint far away. Headshots kill regulars instantly (2–3 body shots); Brutes take 3 headshots or 6 body shots.</p>
       </section>
       <section class="help-section">
         <h3>Hazards, Ammo &amp; Escape</h3>

@@ -1,20 +1,21 @@
-import { DIFFICULTIES, difficultyKey } from './difficulty.js';
+import { DIFFICULTIES, difficultyKey, modeKey, MODES } from './difficulty.js';
 import {
   animatedAnchors, attackContact, attackDirection, burstPhase, BURST_BRAKE, BURST_LOAD, BURST_RUN,
   enemyMotion, HIT_SEGMENTS, hitRadii, strideLength, updateEnemyFooting,
 } from './enemy-motion.js';
 import { populateWorldRoster, syncActiveRoster } from './horde.js';
-import { clampTargetToZone, findZoneStep, isInsideOwnZone, updateHordeTactics } from './tactics.js';
+import { findMazeStep, MAX_PURSUIT_PLAYER_DIST, MAX_TETHER_FROM_HOME, updateHordeTactics } from './tactics.js';
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '2.0.1';
+export const BUILD = '2.1.0';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [12, 16, 20, 24], reload: 1.45, interval: 0.28, range: 48, damage: 1, noise: 22, rounds: 1, spread: 0 },
   shotgun: { name: 'Pump shotgun', capacities: [5, 6, 7, 8], reload: 2.1, interval: 0.78, range: 28, damage: 1, noise: 28, rounds: 7, spread: 0.072 },
   smg: { name: 'Compact SMG', capacities: [24, 28, 32, 36], reload: 1.75, interval: 0.10, range: 42, damage: 1, noise: 24, rounds: 1, spread: 0.02 },
   carbine: { name: 'Ranger carbine', capacities: [16, 20, 24, 28], reload: 1.9, interval: 0.22, range: 56, damage: 1, noise: 26, rounds: 1, spread: 0 },
+  spraycan: { name: 'Spray can', capacities: [1, 1, 1, 1], reload: 0, interval: 0.08, range: 4.2, spray: true },
 };
 
 // Regular zombies die in 1 headshot or 2-3 body shots (shrieker: 2 body, shambler: 3 body).
@@ -196,16 +197,20 @@ function emit(run, type, data = {}) {
   run.events.push({ type, ...data });
 }
 
-export function createRun(seed = 'last-night', { populate = true, difficulty = 'standard' } = {}) {
+export function createRun(seed = 'last-night', { populate = true, difficulty = 'standard', mode = 'flashlight' } = {}) {
   const key = difficultyKey(difficulty);
+  const mKey = modeKey(mode);
+  const noLight = MODES[mKey].noLight;
   const rules = DIFFICULTIES[key];
   const world = createWorld(seed, { mazeSize: rules.mazeSize, ammoScale: rules.ammoScale });
   const upgrades = Object.fromEntries(Object.keys(UPGRADES).map(k => [k, 0]));
-  const magazines = { pistol: GUNS.pistol.capacities[0] };
+  const magazines = { pistol: GUNS.pistol.capacities[0], spraycan: 1 };
 
   const run = {
     seed,
     difficulty: key,
+    mode: mKey,
+    noLight,
     rules,
     world,
     populate,
@@ -222,16 +227,16 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
       magazines,
       get ammo() { return this.magazines[this.weapon]; },
       set ammo(value) { this.magazines[this.weapon] = value; },
-      reserve: 20,
+      reserve: noLight ? Infinity : 20,
       get equippedReserve() { return this.reserve; },
       set equippedReserve(value) { this.reserve = value; },
       armor: 0,
       protection: 0,
       cooldown: 0,
       reload: null,
-      flashlight: true,
-      battery: 1,
-      beam: 'wide',
+      flashlight: !noLight,
+      battery: noLight ? 0 : 1,
+      beam: noLight ? 'off' : 'wide',
       upgrades,
       kills: 0,
       headshots: 0,
@@ -246,6 +251,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
     corpses: [],
     loot: [],
     settledLoot: new Set(),
+    paintMarks: [],
     noises: [],
     events: [],
     offer: null,
@@ -398,9 +404,39 @@ function eliminate(run, e, headshot) {
   if (run.rng() < 0.45) setLoot(run, 'ammo', e.x, e.z, undefined, 4 + Math.floor(run.rng() * 4));
 }
 
+function sprayPaint(run, aim) {
+  const { player: p, world } = run;
+  const gun = GUNS.spraycan;
+  const o = aim.origin, center = norm(aim.ray);
+  p.cooldown = gun.interval;
+  const hit = world.raycast(o, center, gun.range, true);
+  if (!hit || !hit.normal) return;
+  const pt = rayPoint(o, center, hit.t);
+  const mark = {
+    x: pt.x + hit.normal.x * 0.012,
+    y: pt.y + hit.normal.y * 0.012,
+    z: pt.z + hit.normal.z * 0.012,
+    nx: hit.normal.x,
+    ny: hit.normal.y,
+    nz: hit.normal.z,
+    surface: hit.kind,
+  };
+  for (let i = Math.max(0, run.paintMarks.length - 8); i < run.paintMarks.length; i++) {
+    const prev = run.paintMarks[i];
+    if (Math.hypot(mark.x - prev.x, mark.y - prev.y, mark.z - prev.z) < 0.14) return;
+  }
+  run.paintMarks.push(mark);
+  if (run.paintMarks.length > 450) run.paintMarks.shift();
+  emit(run, 'spray', mark);
+}
+
 export function shoot(run, aim) {
   const { player: p, world } = run, gun = GUNS[p.weapon];
   if (run.status !== 'playing' || p.cooldown > 0 || p.reload) return;
+  if (gun.spray) {
+    sprayPaint(run, aim);
+    return;
+  }
   const o = aim.origin, center = norm(aim.ray);
   const blocked = muzzleCover(world, aim);
   const flashOrigin = blocked ? rayPoint(blocked.point, blocked.ray, -0.045) : o;
@@ -490,7 +526,7 @@ export function shoot(run, aim) {
 
 export function startReload(run) {
   const p = run.player, gun = GUNS[p.weapon];
-  if (p.reload || !p.reserve || p.ammo >= magazineCapacity(p) || run.status !== 'playing') return false;
+  if (gun.spray || p.reload || (!run.noLight && !p.reserve) || p.ammo >= magazineCapacity(p) || run.status !== 'playing') return false;
   const duration = gun.reload * 0.85 ** p.upgrades.reload;
   p.reload = { duration, left: duration, weapon: p.weapon };
   emit(run, 'reload', { weapon: p.weapon });
@@ -514,6 +550,7 @@ function takeLoot(run, confirm) {
     }
 
     if (k === 'ammo') {
+      if (run.noLight) continue;
       const got = Math.max(0, Math.min(RESERVE_MAX - p.reserve, l.amount || 6));
       if (!got) continue;
       p.reserve += got;
@@ -532,8 +569,10 @@ function takeLoot(run, confirm) {
   const item = run.offer;
   if (!confirm || !item) return;
   if (item.kind in GUNS) {
-    p.magazines[item.kind] = Math.min(GUNS[item.kind].capacities[p.upgrades.capacity], Math.max(4, p.reserve));
-    p.reserve = Math.max(0, p.reserve - p.magazines[item.kind]);
+    p.magazines[item.kind] = run.noLight
+      ? GUNS[item.kind].capacities[p.upgrades.capacity]
+      : Math.min(GUNS[item.kind].capacities[p.upgrades.capacity], Math.max(4, p.reserve));
+    if (!run.noLight) p.reserve = Math.max(0, p.reserve - p.magazines[item.kind]);
     equipWeapon(p, item.kind);
   } else {
     p.armor = Number(item.kind.at(-1));
@@ -571,20 +610,42 @@ function perception(run, e, gap, lamps) {
   let best = null;
   const offer = candidate => { if (!best || candidate.score > best.score) best = candidate; };
 
-  // Blind zombie awareness in total darkness: only detects at physical bump radius (~1.25-1.65 m)
+  const home = e.home || { x: e.x, z: e.z };
+  const overTether = distance(e, home) > MAX_TETHER_FROM_HOME || distance(p, home) > MAX_PURSUIT_PLAYER_DIST + 1.5;
+
+  // Blind zombie awareness in darkness: physical bump radius + doorway rear ambush when player passes by
   const playerZone = world.zoneAt(p.x, p.z);
+  const myZone = e.zoneId != null ? world.labyrinth.zones[e.zoneId] : null;
   const sameZone = playerZone && e.zoneId === playerZone.id;
+  const nearDoorOfZone = myZone && myZone.doors.some(d => distance(p, d) < 2.6);
   const blindRange = rules.blindSight + (sameZone ? 0.25 : 0);
-  if (gap < blindRange && world.clear(origin, playerEye)) {
-    const firstTouch = !e.alerted;
-    e.dormant = false;
-    e.alerted = true;
-    offer(get(p.x, p.z, 3.5, 'bump', 'player', true));
-    if (firstTouch) enemyVoice(run, e, 'shriek');
+  const clearEye = gap < 6.0 && world.clear(origin, playerEye);
+
+  if (!overTether && clearEye) {
+    if (gap < blindRange) {
+      const firstTouch = !e.alerted;
+      e.dormant = false;
+      e.alerted = true;
+      e.returning = null;
+      offer(get(p.x, p.z, 3.5, 'bump', 'player', true));
+      if (firstTouch) enemyVoice(run, e, 'shriek');
+    } else if ((sameZone || nearDoorOfZone) && gap < 5.4) {
+      // Ambush trigger when player walks past a doorway or turns their back inside the room
+      const fwd = direction(p.yaw);
+      const toEnemyDot = ((e.x - p.x) * fwd.x + (e.z - p.z) * fwd.z) / (gap || 1);
+      if (toEnemyDot < 0.22 || gap < 3.2) {
+        const firstAmbush = !e.alerted;
+        e.dormant = false;
+        e.alerted = true;
+        e.returning = null;
+        offer(get(p.x, p.z, 2.8, 'ambush', 'ambush', true));
+        if (firstAmbush) enemyVoice(run, e, 'shriek');
+      }
+    }
   }
 
   // Flashlight beam touching zombie or doorway splash draws zombie toward light origin
-  if (lamps.length) {
+  if (!overTether && lamps.length) {
     const torsoPt = { ...origin, y: ENEMIES[e.kind].height * 0.58 };
     const groundPt = { ...origin, y: 0.28 };
     for (const light of lamps) {
@@ -592,27 +653,31 @@ function perception(run, e, gap, lamps) {
       if (inBeam(world, light, origin) || inBeam(world, light, torsoPt) || inBeam(world, light, groundPt)) {
         e.dormant = false;
         e.alerted = true;
+        e.returning = null;
         offer(get(light.origin.x, light.origin.z, 1.35 - gap / (light.range + 8) * 0.5, 'flashlight', 'lamp', true));
       }
     }
   }
 
   // Noise events (gunshots, shrieks, pebbles/branches/puddles, loud footsteps) scoped cleanly to zone / unoccluded threshold
-  for (let i = run.noises.length - 1; i >= 0; i--) {
-    const n = run.noises[i], age = time - n.born, d = distance(origin, n.origin);
-    if (age > n.span || d >= n.radius) continue;
-    const isSameZone = n.zoneId != null && e.zoneId === n.zoneId;
-    if (!isSameZone && d > 10) continue;
-    const occluded = !world.clear(origin, n.origin, false);
-    if (!isSameZone && occluded) continue;
-    const radius = n.radius * (occluded ? 0.55 : 1);
-    if (d >= radius) continue;
-    const weight = n.kind === 'gunshot' ? 1.4 : n.kind === 'shriek' ? 1.15 : n.kind === 'puddles' || n.kind === 'branches' || n.kind === 'pebbles' ? 1.35 : 0.85;
-    const score = (1 - d / radius) * (1 - age / n.span) * weight;
-    if (score > 0.14) {
-      e.dormant = false;
-      e.alerted = true;
-      offer(get(n.origin.x, n.origin.z, score, n.kind, n.kind, true));
+  if (!overTether) {
+    for (let i = run.noises.length - 1; i >= 0; i--) {
+      const n = run.noises[i], age = time - n.born, d = distance(origin, n.origin);
+      if (age > n.span || d >= n.radius) continue;
+      const isSameZone = n.zoneId != null && e.zoneId === n.zoneId;
+      if (!isSameZone && d > 9.5) continue;
+      const occluded = !world.clear(origin, n.origin, false);
+      if (!isSameZone && occluded) continue;
+      const radius = n.radius * (occluded ? 0.55 : 1);
+      if (d >= radius) continue;
+      const weight = n.kind === 'gunshot' ? 1.4 : n.kind === 'shriek' ? 1.15 : n.kind === 'puddles' || n.kind === 'branches' || n.kind === 'pebbles' ? 1.35 : 0.85;
+      const score = (1 - d / radius) * (1 - age / n.span) * weight;
+      if (score > 0.14) {
+        e.dormant = false;
+        e.alerted = true;
+        e.returning = null;
+        offer(get(n.origin.x, n.origin.z, score, n.kind, n.kind, true));
+      }
     }
   }
 
@@ -620,16 +685,17 @@ function perception(run, e, gap, lamps) {
     e.memory = { ...best, until: time + rules.memorySeconds };
   }
 
-  if (!best && e.memory?.until > time && distance(e, e.memory) > 0.9) {
+  if (!best && e.memory?.until > time && distance(e, e.memory) > 0.9 && !overTether) {
     best = { ...e.memory, score: 0.2, reason: 'searching', chase: true };
   }
 
-  if (!best && e.memory && e.memory.until <= time) {
+  if ((!best && e.memory && e.memory.until <= time) || overTether) {
+    if (e.alerted || e.memory) e.returning = { x: home.x, z: home.z };
     e.memory = null;
     e.alerted = false;
   }
 
-  const nextReason = best?.reason || 'wallProwl';
+  const nextReason = best?.reason || (e.returning ? 'returning' : 'ambushIdle');
   if (nextReason !== e.reason) e.changedAt = time;
   e.reason = nextReason;
   e.target = best;
@@ -746,9 +812,26 @@ function attack(run, enemy, gap, dt) {
 function navigate(run, e, tx, tz, dt) {
   const cfg = ENEMIES[e.kind], { time, world } = run;
   const labyrinth = world.labyrinth;
-  const zone = e.zoneId != null ? labyrinth.zones[e.zoneId] : null;
-  const clamped = zone ? clampTargetToZone(zone, tx, tz) : { x: tx, z: tz };
-  const stepTarget = zone && zone.kind === 'hallway' ? findZoneStep(labyrinth, zone, e, clamped) : clamped;
+
+  // Concealed zombies wait silently & motionless in their corner until ambush/alert triggers
+  if (e.tactic?.role === 'ambushIdle' && !e.target?.chase) {
+    const face = Math.atan2((e.tactic.lookX ?? tx) - e.x, (e.tactic.lookZ ?? tz) - e.z);
+    e.yaw += clamp(angleDelta(face, e.yaw), -dt * 3, dt * 3);
+    e.moveSpeed = 0;
+    e.stride = 0;
+    return;
+  }
+
+  // Multi-room grid navigation (cached 0.32 s) so ambushing zombies can cross doorways briefly and return home
+  const [tc, tr] = labyrinth.worldToCell(tx, tz);
+  const navKey = `${tc}:${tr}:${e.tactic?.role || ''}`;
+  let stepTarget;
+  if (e._mazeNav && e._mazeNav.key === navKey && time < e._mazeNav.until && distance(e, e._mazeNav.target) > 0.4) {
+    stepTarget = e._mazeNav.target;
+  } else {
+    stepTarget = findMazeStep(labyrinth, e, { x: tx, z: tz });
+    e._mazeNav = { key: navKey, target: stepTarget, until: time + 0.32 };
+  }
 
   const desired = Math.atan2(stepTarget.x - e.x, e.z - stepTarget.z);
   let vx = Math.sin(desired), vz = -Math.cos(desired);
@@ -772,7 +855,7 @@ function navigate(run, e, tx, tz, dt) {
   const progress = e.stumble > 0 ? 1 - e.stumble / e.stumbleDuration : 0;
   const stumblePace = progress > 0 ? 1 - 0.43 * Math.sin(Math.PI * progress) + 0.16 * Math.sin(2 * Math.PI * progress) : 1;
 
-  const baseSpeed = e.target?.chase ? Math.min(run.rules.speedLimit, cfg.chaseSpeed * run.rules.aggroScale) : cfg.speed;
+  const baseSpeed = e.target?.chase ? Math.min(run.rules.speedLimit, cfg.chaseSpeed * run.rules.aggroScale) : cfg.speed * 1.15;
   const speedTarget = (isBurst ? run.rules.speedLimit : baseSpeed * e.pace * stepPace * stumblePace)
     * (e.slow > 0 ? 0.58 : 1) * (e.stun > 0 ? 0.45 : 1) * (e.recover > 0.32 ? 0.35 : 1);
   const previous = e.moveSpeed;
@@ -784,19 +867,15 @@ function navigate(run, e, tx, tz, dt) {
   for (const turn of [0, 0.59, -0.59, 1.15, -1.15, 1.72, -1.72, 2.22]) {
     const vector = direction(e.yaw + turn * e.turnSide);
     const probe = Math.max(0.64, speed * 0.44);
-    const probeX = e.x + vector.x * probe;
-    const probeZ = e.z + vector.z * probe;
-    if (world.blocks(probeX, probeZ, radius + 0.06)) continue;
-    const stepX = vector.x * dt * speed, stepZ = vector.z * dt * speed;
-    if (zone && !isInsideOwnZone(labyrinth, zone, e.x + stepX, e.z + stepZ)) continue;
-    world.move(e, stepX, stepZ, radius);
+    if (world.blocks(e.x + vector.x * probe, e.z + vector.z * probe, radius + 0.06)) continue;
+    world.move(e, vector.x * dt * speed, vector.z * dt * speed, radius);
     if (turn) e.yaw += clamp(turn * e.turnSide, -dt * look, dt * look);
     if (distance(e, { x: oldX, z: oldZ }) > 0.001) break;
   }
 
   const moved = Math.hypot(e.x - oldX, e.z - oldZ);
   e.stuck = moved < 0.001 ? e.stuck + dt : Math.max(0, e.stuck - dt * 3);
-  if (e.stuck > 0.85) { e.turnSide *= -1; e.patrolUntil = 0; e.stuck = 0; }
+  if (e.stuck > 0.85) { e.turnSide *= -1; e.stuck = 0; }
   if (moved > 0.012 && !burst && time > e.nextStumble) {
     e.stumbleDuration = (e.kind === 'brute' ? 0.92 : e.kind === 'shrieker' ? 0.49 : 0.75) * (1.17 - 0.19 * e.pace);
     e.stumble = e.stumbleDuration;
@@ -817,6 +896,15 @@ function updateEnemies(run, dt, lamps) {
     updateHordeTactics(run);
     run.nextTacticsTick = time + 0.30;
   }
+
+  // Restrict ambient/threat vocalizations to ONLY the 4 closest active/close zombies
+  const audible = run.enemies
+    .filter(e => !e.dead && (e.alerted || e.target?.chase || distance(e, p) < 5.0))
+    .map(e => ({ id: e.id, gap: distance(e, p) }))
+    .filter(entry => entry.gap <= 15)
+    .sort((a, b) => a.gap - b.gap)
+    .slice(0, 4);
+  const voiceAllowed = new Set(audible.map(entry => entry.id));
 
   for (const e of run.enemies) {
     if (e.dead) continue;
@@ -840,14 +928,15 @@ function updateEnemies(run, dt, lamps) {
 
     const nav = e.target?.chase
       ? { x: e.target.x, z: e.target.z }
-      : (e.tactic || e.patrolTarget || { x: e.x, z: e.z });
+      : (e.tactic || e.home || { x: e.x, z: e.z });
     e.route = nav;
     navigate(run, e, nav.x, nav.z, dt);
-    voiceCadence(run, e, gap);
+    if (voiceAllowed.has(e.id)) voiceCadence(run, e, gap);
   }
 }
 
 export function inspectFlashlights(run, input) {
+  if (run.noLight) return;
   const p = run.player;
   if (input.toggleLight) {
     if (!p.flashlight && p.battery <= 0) emit(run, 'light', { on: false, empty: true });
@@ -894,9 +983,9 @@ export function stepRun(run, input = {}, dt = STEP) {
     p.reload.left -= dt;
     if (p.reload.left <= 0) {
       const need = magazineCapacity(p) - p.ammo;
-      const takeRounds = Math.min(need, p.reserve);
+      const takeRounds = run.noLight ? need : Math.min(need, p.reserve);
       p.ammo += takeRounds;
-      p.reserve -= takeRounds;
+      if (!run.noLight) p.reserve -= takeRounds;
       p.reload = null;
       emit(run, 'reloaded', { weapon: p.weapon, ammo: p.ammo });
     }
@@ -906,9 +995,12 @@ export function stepRun(run, input = {}, dt = STEP) {
   if (input.cycleWeapon) cycleWeapon(run);
   inspectFlashlights(run, input);
 
-  // Fixed non-upgradable 30s flashlight battery
-  const activeLight = p.flashlight && p.beam !== 'off' && !input.lampUnavailable;
-  if (activeLight) {
+  // Fixed non-upgradable 30s flashlight battery (disabled completely in No Light mode)
+  const activeLight = !run.noLight && p.flashlight && p.beam !== 'off' && !input.lampUnavailable;
+  if (run.noLight) {
+    p.flashlight = false;
+    p.battery = 0;
+  } else if (activeLight) {
     p.battery = Math.max(0, p.battery - dt / FLASHLIGHT_RUNTIME);
     if (p.battery === 0) {
       p.flashlight = false;
@@ -953,7 +1045,7 @@ export function stepRun(run, input = {}, dt = STEP) {
     syncLoot(run);
   }
 
-  if ((input.fire || (input.fireHeld && p.weapon === 'smg')) && !input.weaponUnavailable && input.aim) {
+  if ((input.fire || (input.fireHeld && (p.weapon === 'smg' || p.weapon === 'spraycan'))) && !input.weaponUnavailable && input.aim) {
     shoot(run, input.aim);
   }
 
@@ -981,12 +1073,15 @@ export function inventorySnapshot(run) {
       equipped: p.weapon === k,
       ammo: mag,
       capacity: GUNS[k].capacities[p.upgrades.capacity],
+      spray: Boolean(GUNS[k].spray),
     })),
     reserve: p.reserve,
+    noLight: run.noLight,
     armor: p.armor,
     kills: p.kills,
     time: run.time,
     difficulty: run.rules.name,
+    modeName: MODES[run.mode].name,
     upgrades: Object.entries(UPGRADES).map(([k, u]) => ({
       key: k,
       name: u.name,

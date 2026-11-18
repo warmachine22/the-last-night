@@ -39,7 +39,28 @@ surfaces.floor.map.repeat.set(16, 16);
 surfaces.wall.map.repeat.set(2, 1.4);
 
 const enemyModels = Object.keys(ENEMIES).flatMap(kind => [kind, kind + '-alt']);
-const modelNames = [...Object.keys(GUNS), 'flashlight', 'glove', ...enemyModels];
+const modelNames = [...Object.keys(GUNS).filter(k => k !== 'spraycan'), 'flashlight', 'glove', ...enemyModels];
+
+function makeSprayCan() {
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.028, 0.029, 0.14, 12),
+    new THREE.MeshStandardMaterial({ color: 0xe65b1e, roughness: 0.45, metalness: 0.25 }),
+  );
+  body.position.set(0, 0.015, -0.025);
+  const top = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.013, 0.027, 0.026, 12),
+    new THREE.MeshStandardMaterial({ color: 0xbac0c4, roughness: 0.3, metalness: 0.7 }),
+  );
+  top.position.set(0, 0.095, -0.025);
+  const nozzle = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.008, 0.008, 0.018, 8),
+    new THREE.MeshStandardMaterial({ color: 0xf4f0e6, roughness: 0.6 }),
+  );
+  nozzle.position.set(0, 0.114, -0.025);
+  group.add(body, top, nozzle);
+  return group;
+}
 
 function makeLamp(map = beamTexture()) {
   const lamp = new THREE.SpotLight(0xffedd2, 0, 18, 0.49, 0.78, 2);
@@ -302,7 +323,16 @@ export function createPresentation(scene, art, layouts) {
   const gloveR = tool('glove', weaponMount);
   const gloveL = tool('glove', offhandMount);
   const flashlight = tool('flashlight', lampMount);
-  const guns = Object.fromEntries(Object.keys(GUNS).map(w => [w, tool(w, weaponMount)]));
+  const guns = Object.fromEntries(
+    Object.keys(GUNS).map(w => {
+      if (w === 'spraycan') {
+        const can = makeSprayCan();
+        weaponMount.add(can);
+        return [w, can];
+      }
+      return [w, tool(w, weaponMount)];
+    }),
+  );
   const firstPersonMats = new Map();
   for (const model of [gloveR, gloveL, flashlight, ...Object.values(guns)]) {
     model.traverse(node => {
@@ -315,6 +345,24 @@ export function createPresentation(scene, art, layouts) {
       node.material = firstPersonMats.get(node.material);
     });
   }
+
+  const paintMesh = new THREE.InstancedMesh(
+    new THREE.CircleGeometry(0.11, 10),
+    new THREE.MeshStandardMaterial({
+      color: 0xff621a,
+      emissive: 0x3b1203,
+      roughness: 0.55,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      side: THREE.DoubleSide,
+    }),
+    450,
+  );
+  paintMesh.count = 0;
+  paintMesh.frustumCulled = false;
+  scene.add(paintMesh);
+  const paintQuat = new THREE.Quaternion();
+  const forwardZ = v3(0, 0, 1);
 
   const iconTextures = Object.fromEntries(Object.keys(LOOT).map(kind => [kind, lootIcon(kind)]));
   const chunks = new Map();
@@ -345,6 +393,7 @@ export function createPresentation(scene, art, layouts) {
   let tick = 0;
   let currentRun = null;
   let artworkLit = null;
+  let syncedPaint = 0;
 
   function reset(run) {
     currentRun = run;
@@ -356,6 +405,26 @@ export function createPresentation(scene, art, layouts) {
     pickups.clear();
     for (const effect of effects.splice(0)) { effect.mesh.visible = false; impactPool.push(effect.mesh); }
     flashState.shot = null;
+    paintMesh.count = 0;
+    syncedPaint = 0;
+  }
+
+  function syncPaintMarks(run) {
+    const marks = run.paintMarks || [];
+    if (marks.length === syncedPaint && marks.length < 450) return;
+    const count = Math.min(450, marks.length);
+    for (let i = 0; i < count; i++) {
+      const m = marks[i];
+      temp.position.set(m.x, m.y, m.z);
+      paintQuat.setFromUnitVectors(forwardZ, temp.up.set(m.nx, m.ny, m.nz));
+      temp.quaternion.copy(paintQuat);
+      temp.scale.setScalar(0.85 + (i % 4) * 0.12);
+      temp.updateMatrix();
+      paintMesh.setMatrixAt(i, temp.matrix);
+    }
+    paintMesh.count = count;
+    paintMesh.instanceMatrix.needsUpdate = true;
+    syncedPaint = marks.length;
   }
 
   function discardChunk(group) {
@@ -579,7 +648,7 @@ export function createPresentation(scene, art, layouts) {
     const showHands = active || inspecting;
     for (const [k, m] of Object.entries(guns)) m.visible = k === p.weapon;
     weaponAnchor.visible = (showHands || calibration) && !!tracking.weapon;
-    lampAnchor.visible = showHands && !!tracking.lamp;
+    lampAnchor.visible = !run.noLight && showHands && !!tracking.lamp;
     const hand = tracking.support || tracking.lamp;
     supportAnchor.visible = showHands && !!hand;
     if (tracking.weapon) {
@@ -681,6 +750,7 @@ export function createPresentation(scene, art, layouts) {
     const p = run.player;
     const frozen = run.status !== 'playing';
     updateChunks(run.world, p);
+    syncPaintMarks(run);
     updateEnemies(run, dt, [aimHit?.e?.id], [aim].filter(Boolean), enemyAlpha, frozen);
     updateTools(run, dt, settings, tracking, active, inspecting, stereo, calibration, beam);
     updateLoot(run, beam, Math.max(flashState.bounce.intensity, flashState.muzzle.intensity * 0.05));

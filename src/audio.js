@@ -10,12 +10,12 @@ const voices = {
 const voiceSamples = new Set(Object.values(voices).flat().concat('z10'));
 const voiceLevel = { voice: .90, windup: 1.04, shriek: 1.18 };
 const voiceWeight = { voice: 1, windup: 1.65, shriek: 1.48 };
-const voiceLimit = 8;
+const voiceLimit = 4;
 
 export function threatMix(metres, occluded) {
-  const distanceGain = 1 / (1 + (Math.max(0, metres - 1.2) / 4.25) ** 1.75);
-  const fade = Math.min(1, Math.max(0, (22 - metres) / 5));
-  return { gain: distanceGain * fade * (occluded ? .60 : 1), cutoff: occluded ? 1350 : 19000 };
+  const distanceGain = 1 / (1 + (Math.max(0, metres - 1.2) / 3.8) ** 1.85);
+  const fade = Math.min(1, Math.max(0, (16 - metres) / 4));
+  return { gain: distanceGain * fade * (occluded ? .55 : 1), cutoff: occluded ? 1250 : 19000 };
 }
 
 export function voicePriority(type, metres) {
@@ -164,6 +164,7 @@ export function createAudio() {
       * (.65 + .35 * Math.cos(2 * Math.PI * 24 * t)));
     procedural('wallBump', .16, (t, n, low) => (Math.sin(2 * Math.PI * 95 * t) * .55 + low * .45) * Math.exp(-t * 26) * Math.min(1, t * 180));
     procedural('dotPop', .14, (t, n, low) => (Math.sin(2 * Math.PI * (420 - 240 * t) * t) * .5 + n * .3) * Math.exp(-t * 24));
+    procedural('spray', .14, (t, n, low) => (n * .78 - low * .24) * .55 * Math.sin(Math.PI * t / .14) ** .6);
   }
 
   function play(name, { bus = effects, gain = .4, speed = 1, loc } = {}) {
@@ -331,6 +332,8 @@ export function createAudio() {
         play(e.kind, { gain: e.quiet ? .25 : .64, loc: e, speed: .9 + Math.random() * .2 });
       } else if (e.type === 'wallBump') {
         play('wallBump', { gain: .28, speed: .92 + Math.random() * .18 });
+      } else if (e.type === 'spray') {
+        play('spray', { gain: .28, speed: .95 + Math.random() * .12 });
       } else if (e.type === 'dotHit') {
         play('dotPop', { gain: .48, loc: e });
       } else if (e.type === 'deflect') {

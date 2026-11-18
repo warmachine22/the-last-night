@@ -276,16 +276,21 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
     zoneId: exitZone.id,
   };
 
-  // Identify wall-adjacent cells per zone for corner/wall zombie ambush placement
+  // Identify concealed wall-adjacent cells per zone (sorted farthest from doorways so zombies don't expose themselves early)
   for (const z of zones) {
+    const scored = [];
     for (const [c, r] of z.cells) {
+      const pt = cellCenter(c, r);
       const touchesWall =
         hEdges[r][c] === '#' || hEdges[r + 1][c] === '#' ||
         vEdges[r][c] === '#' || vEdges[r][c + 1] === '#';
-      const nearDoor = z.doors.some(d => Math.hypot(minX + (c + 0.5) * LABYRINTH_CELL - d.x, minZ + (r + 0.5) * LABYRINTH_CELL - d.z) < 2.25);
-      if (touchesWall && !nearDoor) z.wallCells.push(cellCenter(c, r));
+      const minDoorDist = z.doors.length
+        ? Math.min(...z.doors.map(d => Math.hypot(pt.x - d.x, pt.z - d.z)))
+        : 10;
+      if (touchesWall && minDoorDist >= 2.2) scored.push({ ...pt, score: minDoorDist });
     }
-    if (!z.wallCells.length) z.wallCells = z.cells.map(([c, r]) => cellCenter(c, r));
+    scored.sort((a, b) => b.score - a.score);
+    z.wallCells = scored.length ? scored : z.cells.map(([c, r]) => cellCenter(c, r));
   }
 
   // 6) Compile wall colliders & doorway lintels/jambs for spatial queries

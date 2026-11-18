@@ -19,28 +19,31 @@ export function drawFieldMapAndInventory(ctx, width, height, run, hint = '', sec
 
   ctx.fillStyle = '#8b9c89';
   ctx.font = '18px monospace';
-  ctx.fillText(`DIFFICULTY: ${snap.difficulty.toUpperCase()}    ·    TIME: ${clock}    ·    KILLS: ${snap.kills}`, 44, 102);
+  ctx.fillText(`MODE: ${snap.modeName.toUpperCase()}  ·  ${snap.difficulty.toUpperCase()}  ·  TIME: ${clock}  ·  KILLS: ${snap.kills}`, 44, 102);
 
   ctx.fillStyle = '#d8dfd0';
   ctx.font = 'bold 20px monospace';
-  ctx.fillText('WEAPONS & AMMUNITION', 44, 158);
+  ctx.fillText('WEAPONS & GEAR', 44, 158);
   let y = 194;
   for (const w of snap.weapons) {
     ctx.fillStyle = w.equipped ? '#e8c47a' : '#96a595';
     ctx.font = (w.equipped ? 'bold ' : '') + '20px monospace';
-    ctx.fillText(`${w.equipped ? '▶ ' : '  '}${w.name.padEnd(18, ' ')}  ${w.ammo}/${w.capacity} loaded`, 44, y);
+    const qty = w.spray ? '∞ paint' : `${w.ammo}/${w.capacity} loaded`;
+    ctx.fillText(`${w.equipped ? '▶ ' : '  '}${w.name.padEnd(18, ' ')}  ${qty}`, 44, y);
     y += 34;
   }
 
   y += 12;
   ctx.fillStyle = '#d8dfd0';
   ctx.font = 'bold 22px monospace';
-  ctx.fillText(`RESERVE AMMO: ${snap.reserve} rounds`, 44, y);
+  ctx.fillText(`RESERVE AMMO: ${snap.noLight ? '∞ (Infinite)' : `${snap.reserve} rounds`}`, 44, y);
   ctx.fillText(`ARMOR PLATES: ${'◆'.repeat(snap.armor)}${'◇'.repeat(Math.max(0, 1 - snap.armor))}`, 44, y + 36);
 
   ctx.fillStyle = '#9aa89b';
   ctx.font = '17px monospace';
-  ctx.fillText('No map available in darkness — use your fixed 30s flashlight & gunfire wisely.', 44, height - 108);
+  ctx.fillText(snap.noLight
+    ? 'No Light Mode: No flashlight — muzzle flash is your only light. Toggle Spray Can to mark walls & floors.'
+    : 'Flashlight Mode: Use your fixed 30s flashlight & Spray Can wisely. Avoid puddles, pebbles & twigs.', 44, height - 108);
   ctx.fillText('Find the single perimeter EXIT chamber while keeping spare rounds.', 44, height - 80);
 
   if (hint) {

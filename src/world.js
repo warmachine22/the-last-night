@@ -26,22 +26,29 @@ export function random(seed) {
 
 function rayAABB(origin, ray, minX, maxX, minY, maxY, minZ, maxZ, max) {
   let near = 0, far = max;
-  for (const [o, d, lo, hi] of [
-    [origin.x, ray.x, minX, maxX],
-    [origin.y, ray.y, minY, maxY],
-    [origin.z, ray.z, minZ, maxZ],
+  let nx = 0, ny = 0, nz = 0;
+  for (const [axis, o, d, lo, hi] of [
+    [0, origin.x, ray.x, minX, maxX],
+    [1, origin.y, ray.y, minY, maxY],
+    [2, origin.z, ray.z, minZ, maxZ],
   ]) {
     if (Math.abs(d) < 1e-8) {
-      if (o < lo || o > hi) return Infinity;
+      if (o < lo || o > hi) return null;
     } else {
       let a = (lo - o) / d, b = (hi - o) / d;
-      if (a > b) [a, b] = [b, a];
-      near = Math.max(near, a);
+      let sign = d > 0 ? -1 : 1;
+      if (a > b) { [a, b] = [b, a]; sign = -sign; }
+      if (a > near) {
+        near = a;
+        nx = axis === 0 ? sign : 0;
+        ny = axis === 1 ? sign : 0;
+        nz = axis === 2 ? sign : 0;
+      }
       far = Math.min(far, b);
-      if (near > far) return Infinity;
+      if (near > far) return null;
     }
   }
-  return near;
+  return { t: near, normal: { x: nx, y: ny, z: nz } };
 }
 
 function circleHitsBox(x, z, radius, bx, bz, rx, rz) {
@@ -170,10 +177,10 @@ export function createWorld(seed, opts = {}) {
   }
 
   function testCellEdges(origin, ray, c, r, limit) {
-    let bestT = Infinity, bestKind = null;
+    let bestT = Infinity, bestKind = null, bestNormal = null;
     const hitEdge = (loX, hiX, loY, hiY, loZ, hiZ, kind) => {
-      const t = rayAABB(origin, ray, loX, hiX, loY, hiY, loZ, hiZ, Math.min(limit, bestT));
-      if (t < bestT && t <= limit) { bestT = t; bestKind = kind; }
+      const res = rayAABB(origin, ray, loX, hiX, loY, hiY, loZ, hiZ, Math.min(limit, bestT));
+      if (res && res.t < bestT && res.t <= limit) { bestT = res.t; bestKind = kind; bestNormal = res.normal; }
     };
 
     const x0 = minX + c * LABYRINTH_CELL, x1 = x0 + LABYRINTH_CELL;
@@ -203,21 +210,22 @@ export function createWorld(seed, opts = {}) {
       }
     }
 
-    return bestKind ? { t: bestT, kind: bestKind } : null;
+    return bestKind ? { t: bestT, kind: bestKind, normal: bestNormal } : null;
   }
 
   // Fast 2D Grid DDA raycast through traversed labyrinth cells
   function raycast(origin, ray, range, ground = true) {
     let limit = range;
     let groundKind = null;
+    let groundNormal = null;
     if (ground) {
       if (ray.y < -1e-4 && origin.y > 0) {
         const floorT = -origin.y / ray.y;
-        if (floorT > 0 && floorT < limit) { limit = floorT; groundKind = 'floor'; }
+        if (floorT > 0 && floorT < limit) { limit = floorT; groundKind = 'floor'; groundNormal = { x: 0, y: 1, z: 0 }; }
       }
       if (ray.y > 1e-4 && origin.y < LABYRINTH_HEIGHT) {
         const ceilT = (LABYRINTH_HEIGHT - origin.y) / ray.y;
-        if (ceilT > 0 && ceilT < limit) { limit = ceilT; groundKind = 'ceiling'; }
+        if (ceilT > 0 && ceilT < limit) { limit = ceilT; groundKind = 'ceiling'; groundNormal = { x: 0, y: -1, z: 0 }; }
       }
     }
 
@@ -232,7 +240,7 @@ export function createWorld(seed, opts = {}) {
     let tMaxZ = Math.abs(ray.z) > 1e-7
       ? ((minZ + (r + (ray.z >= 0 ? 1 : 0)) * LABYRINTH_CELL) - origin.z) / ray.z : Infinity;
 
-    let bestT = limit, bestKind = groundKind;
+    let bestT = limit, bestKind = groundKind, bestNormal = groundNormal;
     const maxSteps = cols + rows + 4;
     for (let step = 0; step < maxSteps; step++) {
       if (c >= 0 && c < cols && r >= 0 && r < rows) {
@@ -240,6 +248,7 @@ export function createWorld(seed, opts = {}) {
         if (hit && hit.t < bestT) {
           bestT = hit.t;
           bestKind = hit.kind;
+          bestNormal = hit.normal;
         }
       }
       const nextT = Math.min(tMaxX, tMaxZ);
@@ -254,7 +263,7 @@ export function createWorld(seed, opts = {}) {
       if (c < -1 || c > cols || r < -1 || r > rows) break;
     }
 
-    return bestKind ? { t: bestT, kind: bestKind, object: null } : null;
+    return bestKind ? { t: bestT, kind: bestKind, normal: bestNormal, object: null } : null;
   }
 
   function clear(a, b, ground = false) {
