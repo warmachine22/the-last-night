@@ -1,6 +1,6 @@
 export const ARENA_HEIGHT = 4.35;
 export const ARENA_DOOR_HEIGHT = 2.65;
-export const ARENA_DOOR_WIDTH = 2.2;
+export const ARENA_DOOR_WIDTH = 2.8;
 export const ARENA_SHIFT_INTERVAL = 30;
 export const ARENA_SHIFT_SPEED = ARENA_HEIGHT / 1.55;
 
@@ -117,7 +117,7 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
       const cx = minX + (c + 0.5) * cellSize;
       const cz = minZ + (r + 0.5) * cellSize;
       if (!insideHex(cx, cz, 0.08)) continue;
-      const nearDoor = faces.some(f => Math.hypot(cx - f.cx, cz - f.cz) < cellSize * 1.15);
+      const nearDoor = faces.some(f => Math.hypot(cx - f.cx, cz - f.cz) < cellSize * 1.45);
       const nearCenter = Math.hypot(cx, cz) < cellSize * 0.85;
       const canRaise = insideHex(cx, cz, cubeMargin) && !nearDoor;
       const tile = {

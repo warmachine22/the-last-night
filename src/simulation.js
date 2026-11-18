@@ -9,7 +9,7 @@ import { findMazeStep, MAX_PURSUIT_PLAYER_DIST, MAX_TETHER_FROM_HOME, updateHord
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '2.4.0';
+export const BUILD = '2.4.1';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [12, 16, 20, 24], reload: 1.45, interval: 0.28, range: 48, damage: 1, noise: 22, rounds: 1, spread: 0 },
@@ -210,6 +210,38 @@ function emit(run, type, data = {}) {
   run.events.push({ type, ...data });
 }
 
+function pickSpawnDoor(run, usedDoors = []) {
+  const arena = run.world.arena, p = run.player, wave = run.wave;
+  const fwd = direction(p.yaw);
+  const scored = arena.faces.map(f => {
+    const dx = f.cx - p.x, dz = f.cz - p.z;
+    const d = Math.hypot(dx, dz) || 1;
+    const lookDot = (dx * fwd.x + dz * fwd.z) / d;
+    return { id: f.id, lookDot, inFront: lookDot > 0.32 };
+  });
+
+  const mostInFront = [...scored].sort((a, b) => b.lookDot - a.lookDot)[0];
+  if (wave && mostInFront && mostInFront.id !== wave.lastFrontDoor) {
+    wave.lastFrontDoor = mostInFront.id;
+    wave.frontDoorSpawns = 0;
+  }
+
+  // After 2 front spawns while camping a doorway, force subsequent spawns behind/outside player's view
+  const blockFront = Boolean(wave && wave.frontDoorSpawns >= 2);
+  let pool = scored.filter(s => (!blockFront || !s.inFront) && s.lookDot <= 0.25);
+  if (!pool.length) pool = scored.filter(s => !s.inFront);
+  if (!pool.length) pool = scored;
+
+  // Strongly prefer doors behind the player (lowest lookDot) and spread multi-zombie bursts cleanly
+  pool.sort((a, b) => a.lookDot - b.lookDot);
+  const behindSlice = pool.slice(0, Math.max(2, Math.ceil(pool.length * 0.7)));
+  const fresh = behindSlice.filter(s => !usedDoors.includes(s.id));
+  const choices = fresh.length ? fresh : behindSlice;
+  const pick = choices[Math.floor(run.rng() * choices.length)];
+  if (wave && pick.inFront) wave.frontDoorSpawns = (wave.frontDoorSpawns || 0) + 1;
+  return pick.id;
+}
+
 function buildWaveQueue(run, waveNum) {
   const total = 5 + waveNum * 3;
   const queue = [];
@@ -219,19 +251,17 @@ function buildWaveQueue(run, waveNum) {
     const maxBurst = waveNum === 1 ? 3 : 5;
     const burst = Math.min(remaining, 1 + Math.floor(run.rng() * maxBurst));
     const entries = [];
-    const baseDoor = Math.floor(run.rng() * 6);
     for (let i = 0; i < burst; i++) {
-      const doorIdx = (baseDoor + Math.floor(run.rng() * 3)) % 6;
       const roll = run.rng();
       const bruteChance = waveNum >= 2 ? Math.min(0.28, 0.08 + waveNum * 0.03) : 0;
       const shriekerChance = Math.min(0.38, 0.18 + waveNum * 0.03);
       const kind = roll < bruteChance ? 'brute' : roll < bruteChance + shriekerChance ? 'shrieker' : 'shambler';
-      entries.push({ doorIdx, kind });
+      entries.push({ kind });
     }
     queue.push(entries);
     remaining -= burst;
   }
-  return { number: waveNum, total, spawned: 0, cleared: 0, queue, burstTimer: 0.4, intermission: 0 };
+  return { number: waveNum, total, spawned: 0, cleared: 0, queue, burstTimer: 0.4, intermission: 0, lastFrontDoor: -1, frontDoorSpawns: 0 };
 }
 
 function spawnWaveRewards(run, clearedWave) {
@@ -804,11 +834,11 @@ function voiceCadence(run, enemy, gap) {
   }
   if (gap > 12.65) enemy.voiceBand = 2;
   else if (gap > 5.65 && enemy.voiceBand === 0) enemy.voiceBand = 1;
-  if (gap > 19 || time < enemy.lastVoice + 0.48 || time < enemy.nextVoice) return;
+  if (gap > 28 || time < enemy.lastVoice + 0.48 || time < enemy.nextVoice) return;
   enemyVoice(run, enemy, 'voice');
   enemy.lastVoice = time;
   const variation = (enemy.voiceVariation + time * 0.53) % 1;
-  enemy.nextVoice = time + (gap <= 5 ? 1.4 + variation * 0.4 : gap <= 12 ? 2.4 + variation * 1.1 : 4.8 + variation * 2.4);
+  enemy.nextVoice = time + (gap <= 5 ? 1.2 + variation * 0.4 : gap <= 12 ? 1.8 + variation * 0.8 : 2.3 + variation * 1.1);
 }
 
 function attack(run, enemy, gap, dt) {
@@ -913,14 +943,16 @@ function navigate(run, e, tx, tz, dt) {
     }
   }
 
+  const inArenaDoorway = Boolean(arena && arena.faces.some(f => e.x * f.nx + e.z * f.nz > arena.apothem - 1.25));
   const desired = Math.atan2(stepTarget.x - e.x, e.z - stepTarget.z);
   let vx = Math.sin(desired), vz = -Math.cos(desired);
+  const sepWeight = inArenaDoorway ? 0.20 : 1.15;
   for (const other of run.enemies) {
     if (other === e || other.dead) continue;
     const dx = e.x - other.x, dz = e.z - other.z, d = dx * dx + dz * dz;
     if (d > 0.001 && d < 0.92) {
-      vx += dx * (0.92 - d) / Math.sqrt(d) * 1.15;
-      vz += dz * (0.92 - d) / Math.sqrt(d) * 1.15;
+      vx += dx * (0.92 - d) / Math.sqrt(d) * sepWeight;
+      vz += dz * (0.92 - d) / Math.sqrt(d) * sepWeight;
     }
   }
 
@@ -945,10 +977,11 @@ function navigate(run, e, tx, tz, dt) {
 
   const oldX = e.x, oldZ = e.z, radius = cfg.width * 0.83;
   const allowAlcove = Boolean(arena);
-  for (const turn of [0, 0.59, -0.59, 1.15, -1.15, 1.72, -1.72, 2.22]) {
+  const turnAngles = inArenaDoorway ? [0, 0.35, -0.35, 0.72, -0.72, 1.15, -1.15] : [0, 0.59, -0.59, 1.15, -1.15, 1.72, -1.72, 2.22];
+  const baseProbe = inArenaDoorway ? Math.max(0.32, speed * 0.24) : Math.max(0.64, speed * 0.44);
+  for (const turn of turnAngles) {
     const vector = direction(e.yaw + turn * e.turnSide);
-    const probe = Math.max(0.64, speed * 0.44);
-    if (world.blocks(e.x + vector.x * probe, e.z + vector.z * probe, radius + 0.06, allowAlcove)) continue;
+    if (world.blocks(e.x + vector.x * baseProbe, e.z + vector.z * baseProbe, radius + 0.05, allowAlcove)) continue;
     world.move(e, vector.x * dt * speed, vector.z * dt * speed, radius, allowAlcove);
     if (turn) e.yaw += clamp(turn * e.turnSide, -dt * look, dt * look);
     if (distance(e, { x: oldX, z: oldZ }) > 0.001) break;
@@ -978,14 +1011,22 @@ function updateEnemies(run, dt, lamps) {
     run.nextTacticsTick = time + 0.30;
   }
 
-  // Restrict ambient/threat vocalizations to ONLY the 4 closest active/close zombies
+  // Restrict ambient/threat vocalizations to ONLY the 4 closest living zombies.
+  // When a closest zombie dies and a new survivor enters the top 4, immediately hand off voice cadence.
+  const prevAudible = run.audibleIds || new Set();
   const audible = run.enemies
-    .filter(e => !e.dead && (e.alerted || e.target?.chase || distance(e, p) < 5.0))
-    .map(e => ({ id: e.id, gap: distance(e, p) }))
-    .filter(entry => entry.gap <= 15)
+    .filter(e => !e.dead && (e.alerted || e.target?.chase || distance(e, p) < 8.0))
+    .map(e => ({ e, id: e.id, gap: distance(e, p) }))
+    .filter(entry => entry.gap <= 28)
     .sort((a, b) => a.gap - b.gap)
     .slice(0, 4);
   const voiceAllowed = new Set(audible.map(entry => entry.id));
+  for (const entry of audible) {
+    if (!prevAudible.has(entry.id)) {
+      entry.e.nextVoice = Math.min(entry.e.nextVoice, time + 0.08);
+    }
+  }
+  run.audibleIds = voiceAllowed;
 
   for (const e of run.enemies) {
     if (e.dead) continue;
@@ -1089,10 +1130,13 @@ function stepArenaState(run, dt) {
       const allowed = Math.min(burst.length, MAX_ACTIVE_ZOMBIES - aliveCount);
       const batch = burst.splice(0, allowed);
       if (burst.length === 0) wave.queue.shift();
+      const usedDoors = [];
       for (const spec of batch) {
-        const face = arena.faces[spec.doorIdx % 6];
-        const side = (run.rng() - 0.5) * 0.55;
-        const back = run.rng() * 0.45;
+        const doorIdx = spec.doorIdx != null ? spec.doorIdx : pickSpawnDoor(run, usedDoors);
+        usedDoors.push(doorIdx);
+        const face = arena.faces[doorIdx % 6];
+        const side = (run.rng() - 0.5) * 0.45;
+        const back = run.rng() * 0.40;
         const sx = face.spawnX + face.tx * side + face.nx * back;
         const sz = face.spawnZ + face.tz * side + face.nz * back;
         const zombie = addEnemy(run, spec.kind, sx, sz, { yaw: face.yaw, dormant: false });
@@ -1100,7 +1144,7 @@ function stepArenaState(run, dt) {
         wave.spawned++;
       }
       wave.burstTimer = Math.max(2.1, 4.4 - wave.number * 0.24) + run.rng() * 1.4;
-      emit(run, 'doorBurst', { count: batch.length, wave: wave.number });
+      emit(run, 'doorBurst', { count: batch.length, wave: wave.number, doors: usedDoors });
     }
     return;
   }

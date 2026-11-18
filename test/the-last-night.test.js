@@ -15,7 +15,7 @@ function advance(run, seconds, input = {}) {
 }
 
 test('all three difficulty maze sizes (78m, 114m, 156m) have high ceilings, mix of tight and big spaces, and one exit', () => {
-  assert.equal(BUILD, '2.4.0');
+  assert.equal(BUILD, '2.4.1');
   assert.equal(CHUNK, 24);
   assert.equal(MAX_ACTIVE_ZOMBIES, 18);
   assert.ok(LABYRINTH_HEIGHT >= 4.0, `ceiling height should be tall (>=4.0m), got ${LABYRINTH_HEIGHT}`);
@@ -228,6 +228,43 @@ test('Fight in Tight Space mode builds a 6-sided 6-door arena with connected pat
     const dist = Math.hypot(z.x - navRun.player.x, z.z - navRun.player.z);
     assert.ok(dist < 3.0, `zombie from doorway ${idx} failed to pathfind to player (ended ${dist.toFixed(1)}m away at ${z.x.toFixed(1)}, ${z.z.toFixed(1)})`);
   }
+
+  // Test 5-zombie simultaneous burst inside one doorway (never wedges in doorway) + behind-player anti-camping spawns + 4-voice handoff
+  const packRun = createRun('door-pack', { mode: 'arena', arenaSize: 'compact', populate: false });
+  const face0 = packRun.world.arena.faces[0];
+  const pack = [];
+  for (let i = 0; i < 5; i++) {
+    const z = addEnemy(packRun, i === 0 ? 'brute' : 'shrieker', face0.spawnX + face0.tx * (i - 2) * 0.14, face0.spawnZ, { yaw: face0.yaw, dormant: false });
+    z.alerted = true;
+    pack.push(z);
+  }
+  for (let i = 0; i < Math.round(6 / STEP); i++) {
+    packRun.player.protection = 1;
+    stepRun(packRun, {}, STEP);
+  }
+  for (const z of pack) {
+    assert.ok(z.x * face0.nx + z.z * face0.nz < packRun.world.arena.apothem - 0.5, 'all 5 doorway zombies must clear the entranceway');
+  }
+
+  // Test closest-4 voice handoff when one of the top 4 is killed
+  assert.equal(packRun.audibleIds.size, 4);
+  const rankedBefore = [...packRun.enemies].sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z));
+  const fifth = rankedBefore[4];
+  assert.equal(packRun.audibleIds.has(fifth.id), false);
+  rankedBefore[0].dead = true;
+  const handoffEvents = advance(packRun, 0.25, {});
+  assert.equal(packRun.audibleIds.has(fifth.id), true, '5th closest zombie must promote into top 4 audio slots on kill');
+  assert.ok(handoffEvents.some(e => e.type === 'voice' && e.id === fifth.id), 'promoted zombie must start making sound promptly');
+
+  // Test anti-camping: staring directly at doorway 0 spawns bursts behind the player after at most 2 front spawns
+  const campRun = createRun('anti-camp', { mode: 'arena', arenaSize: 'medium', populate: true });
+  const campFace = campRun.world.arena.faces[0];
+  campRun.player.yaw = Math.atan2(campFace.cx, -campFace.cz); // stare straight at door 0
+  campRun.wave.frontDoorSpawns = 2; // after player already caught 2 in front
+  campRun.wave.lastFrontDoor = campFace.id;
+  const campEvents = advance(campRun, 1.0, { yaw: campRun.player.yaw });
+  const burstEvt = campEvents.find(e => e.type === 'doorBurst');
+  assert.ok(burstEvt && burstEvt.doors.every(d => d !== campFace.id && d !== 1 && d !== 5), 'camping a doorway must force subsequent bursts behind player view');
 
   // Wave bursts spawn from 6 doors, clearing Wave 1 spawns rewards + Wave 2, and t=30s shifts unoccupied floor cubes
   const run = createRun('arena-shift', { mode: 'arena', arenaSize: 'compact', populate: true });

@@ -13,8 +13,8 @@ const voiceWeight = { voice: 1, windup: 1.65, shriek: 1.48 };
 const voiceLimit = 4;
 
 export function threatMix(metres, occluded) {
-  const distanceGain = 1 / (1 + (Math.max(0, metres - 1.2) / 3.8) ** 1.85);
-  const fade = Math.min(1, Math.max(0, (16 - metres) / 4));
+  const distanceGain = 1 / (1 + (Math.max(0, metres - 1.2) / 5.2) ** 1.65);
+  const fade = Math.min(1, Math.max(0, (28 - metres) / 6));
   return { gain: distanceGain * fade * (occluded ? .55 : 1), cutoff: occluded ? 1250 : 19000 };
 }
 
@@ -270,7 +270,10 @@ export function createAudio() {
     let close = false;
     for (const voice of active.values()) {
       const zombie = run.enemies.find(e => e.id === voice.id && !e.dead);
-      if (!zombie) { stopVoice(voice); continue; }
+      if (!zombie || (active.size >= voiceLimit && run.audibleIds && !run.audibleIds.has(voice.id) && voice.type === 'voice')) {
+        stopVoice(voice);
+        continue;
+      }
       voice.position = mouth(zombie);
       const metres = distance3(position, voice.position);
       close ||= metres <= 7;

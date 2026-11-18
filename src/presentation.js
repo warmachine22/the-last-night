@@ -4,7 +4,7 @@ import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import { CHUNK, clamp, distance, random } from './world.js';
 import { ENEMIES, GUNS, isSupply, LOOT, STEP } from './simulation.js';
 import { LABYRINTH_DOOR_HEIGHT, LABYRINTH_HEIGHT } from './labyrinth.js';
-import { ARENA_HEIGHT } from './arena.js';
+import { ARENA_DOOR_HEIGHT, ARENA_DOOR_WIDTH, ARENA_HEIGHT } from './arena.js';
 import { reloadMount } from './held-tools.js';
 import { burstPhase, interpolateEnemyTransform, legacyEnemyMotion, solvedEnemyPose } from './enemy-motion.js';
 import { beamTexture } from './night-lighting.js';
@@ -133,6 +133,45 @@ function labelCanvas(width, height) {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return { ctx, texture };
+}
+
+function makeDoorSignTexture(labelText = 'BREACH') {
+  const { ctx, texture } = labelCanvas(256, 80);
+  ctx.fillStyle = '#181410';
+  ctx.fillRect(0, 0, 256, 80);
+  // Diagonal hazard stripes along left/right edges
+  ctx.fillStyle = '#d49a2a';
+  for (let x = -40; x < 280; x += 28) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0); ctx.lineTo(x + 12, 0); ctx.lineTo(x + 2, 16); ctx.lineTo(x - 10, 16); ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x, 64); ctx.lineTo(x + 12, 64); ctx.lineTo(x + 2, 80); ctx.lineTo(x - 10, 80); ctx.closePath(); ctx.fill();
+  }
+  ctx.strokeStyle = '#d49a2a';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(3, 18, 250, 44);
+  ctx.fillStyle = '#f2c155';
+  ctx.font = 'bold 28px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(labelText, 128, 49);
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function makeThresholdTexture() {
+  const { ctx, texture } = labelCanvas(256, 64);
+  ctx.fillStyle = '#1e1c18';
+  ctx.fillRect(0, 0, 256, 64);
+  ctx.fillStyle = '#b98324';
+  for (let x = -32; x < 280; x += 32) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0); ctx.lineTo(x + 15, 0); ctx.lineTo(x - 10, 64); ctx.lineTo(x - 25, 64); ctx.closePath(); ctx.fill();
+  }
+  ctx.strokeStyle = '#6e4c19';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, 252, 60);
+  texture.needsUpdate = true;
+  return texture;
 }
 
 function makeExitSignTexture() {
@@ -264,6 +303,15 @@ export function createPresentation(scene, art, layouts) {
   scene.add(ambient);
 
   const exitTex = makeExitSignTexture();
+  const doorSignMat = new THREE.MeshStandardMaterial({
+    map: makeDoorSignTexture('ENTRY // DANGER'), roughness: 0.45, metalness: 0.25,
+  });
+  const thresholdMat = new THREE.MeshStandardMaterial({
+    map: makeThresholdTexture(), roughness: 0.72, metalness: 0.12,
+  });
+  const doorFrameMat = new THREE.MeshStandardMaterial({
+    color: 0x8d4c2d, roughness: 0.55, metalness: 0.35,
+  });
   const flashPattern = beamTexture(true);
   const lamp = makeLamp();
 
@@ -445,6 +493,35 @@ export function createPresentation(scene, art, layouts) {
       place(wallMesh, i, w.x, w.y, w.z, w.w, w.h, w.d, w.angleY, new THREE.Color(w.tint));
     }
     wallMesh?.computeBoundingSphere();
+
+    // Clearly mark all 6 zombie entrances with steel jamb trim, hazard threshold & overhead sign
+    const trimMesh = instance(group, baseBox, doorFrameMat, arena.faces.length * 3, false, true);
+    let trimIdx = 0;
+    const doorSignGeo = new THREE.PlaneGeometry(1.75, 0.52);
+    const threshGeo = new THREE.PlaneGeometry(ARENA_DOOR_WIDTH - 0.1, 0.72);
+    for (const f of arena.faces) {
+      const angleY = Math.atan2(-f.nx, -f.nz);
+      const jambX = ARENA_DOOR_WIDTH / 2 + 0.08;
+      place(trimMesh, trimIdx++, f.cx - f.tx * jambX - f.nx * 0.08, ARENA_DOOR_HEIGHT / 2, f.cz - f.tz * jambX - f.nz * 0.08,
+        0.16, ARENA_DOOR_HEIGHT, 0.36, angleY);
+      place(trimMesh, trimIdx++, f.cx + f.tx * jambX - f.nx * 0.08, ARENA_DOOR_HEIGHT / 2, f.cz + f.tz * jambX - f.nz * 0.08,
+        0.16, ARENA_DOOR_HEIGHT, 0.36, angleY);
+      place(trimMesh, trimIdx++, f.cx - f.nx * 0.08, ARENA_DOOR_HEIGHT + 0.07, f.cz - f.nz * 0.08,
+        ARENA_DOOR_WIDTH + 0.32, 0.16, 0.36, angleY);
+
+      const sign = new THREE.Mesh(doorSignGeo, doorSignMat);
+      sign.position.set(f.cx - f.nx * 0.19, ARENA_DOOR_HEIGHT + 0.42, f.cz - f.nz * 0.19);
+      sign.rotation.y = angleY;
+      sign.receiveShadow = true;
+      group.add(sign);
+
+      const thresh = new THREE.Mesh(threshGeo, thresholdMat);
+      thresh.position.set(f.cx - f.nx * 0.32, 0.012, f.cz - f.nz * 0.32);
+      thresh.rotation.set(-Math.PI / 2, angleY, 0, 'YXZ');
+      thresh.receiveShadow = true;
+      group.add(thresh);
+    }
+    trimMesh?.computeBoundingSphere();
 
     pillarMesh = instance(group, baseBox, surfaces.wall, arena.raiseTiles.length, true, true);
     if (pillarMesh) {
