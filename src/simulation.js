@@ -1,29 +1,32 @@
 import { DIFFICULTIES, difficultyKey } from './difficulty.js';
 import {
   animatedAnchors, attackContact, attackDirection, burstPhase, BURST_BRAKE, BURST_LOAD, BURST_RUN,
-  enemyMotion, HIT_SEGMENTS, hitRadii, rollVitalJoints, strideLength, updateEnemyFooting, VITAL_HIT_RADIUS,
+  enemyMotion, HIT_SEGMENTS, hitRadii, strideLength, updateEnemyFooting,
 } from './enemy-motion.js';
 import { populateWorldRoster, syncActiveRoster } from './horde.js';
 import { clampTargetToZone, findZoneStep, isInsideOwnZone, updateHordeTactics } from './tactics.js';
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '2.0.0';
+export const BUILD = '2.0.1';
 
 export const GUNS = {
-  pistol: { name: 'Service pistol', capacities: [12, 16, 20, 24], reload: 1.45, interval: 0.28, range: 48, damage: 1.24, noise: 22, rounds: 1, spread: 0 },
-  shotgun: { name: 'Pump shotgun', capacities: [5, 6, 7, 8], reload: 2.1, interval: 0.78, range: 28, damage: 0.91, noise: 28, rounds: 7, spread: 0.072 },
-  smg: { name: 'Compact SMG', capacities: [24, 28, 32, 36], reload: 1.75, interval: 0.10, range: 42, damage: 0.93, noise: 24, rounds: 1, spread: 0.02 },
-  carbine: { name: 'Ranger carbine', capacities: [16, 20, 24, 28], reload: 1.9, interval: 0.22, range: 56, damage: 1.49, noise: 26, rounds: 1, spread: 0 },
+  pistol: { name: 'Service pistol', capacities: [12, 16, 20, 24], reload: 1.45, interval: 0.28, range: 48, damage: 1, noise: 22, rounds: 1, spread: 0 },
+  shotgun: { name: 'Pump shotgun', capacities: [5, 6, 7, 8], reload: 2.1, interval: 0.78, range: 28, damage: 1, noise: 28, rounds: 7, spread: 0.072 },
+  smg: { name: 'Compact SMG', capacities: [24, 28, 32, 36], reload: 1.75, interval: 0.10, range: 42, damage: 1, noise: 24, rounds: 1, spread: 0.02 },
+  carbine: { name: 'Ranger carbine', capacities: [16, 20, 24, 28], reload: 1.9, interval: 0.22, range: 56, damage: 1, noise: 26, rounds: 1, spread: 0 },
 };
 
-// Zombie speeds in m/s: slow eerie wall-prowling (~1 mph) up to max 3.0 mph (1.34 m/s) in chase.
+// Regular zombies die in 1 headshot or 2-3 body shots (shrieker: 2 body, shambler: 3 body).
+// Brutes require 3 headshots (2 dmg each) or 6 body shots (1 dmg each).
+// Speeds cap up to 3.0 mph (1.34 m/s max).
 export const ENEMIES = {
-  shambler: { speed: 0.44, chaseSpeed: 1.06, height: 1.77, width: 0.28, hp: 3.2, windup: 0.60, reach: 1.19 },
-  shrieker: { speed: 0.56, chaseSpeed: 1.34, height: 1.66, width: 0.23, hp: 2.4, windup: 0.44, reach: 1.16 },
-  brute: { speed: 0.38, chaseSpeed: 0.92, height: 2.0, width: 0.36, hp: 5.9, windup: 0.82, reach: 1.35 },
+  shambler: { speed: 0.44, chaseSpeed: 1.06, height: 1.77, width: 0.28, hp: 3, windup: 0.60, reach: 1.19 },
+  shrieker: { speed: 0.56, chaseSpeed: 1.34, height: 1.66, width: 0.23, hp: 2, windup: 0.44, reach: 1.16 },
+  brute: { speed: 0.38, chaseSpeed: 0.92, height: 2.0, width: 0.36, hp: 6, windup: 0.82, reach: 1.35 },
 };
 
+// Flashlight is NOT upgradable — only firearm upgrades exist.
 export const UPGRADES = {
   damage: { name: 'Hot loads', icon: '▲', cap: 3, color: '#ff8b70', description: '+15% impact stagger' },
   pierce: { name: 'Piercing rounds', icon: '»', cap: 2, color: '#ffb36c', description: '+1 target per shot' },
@@ -43,10 +46,11 @@ export const LOOT = {
 
 const POINT = { x: 0, y: 0, z: -1 };
 const RESERVE_MAX = 120;
+const FLASHLIGHT_RUNTIME = 30;
 const MUZZLE_LIGHT_DURATION = 0.22;
-const MUZZLE_REVEAL_WINDOW = 0.55;
 const MUZZLE_LIGHT_RANGE = 20;
 const DRY_SPARK_RANGE = 3.5;
+const beamCycle = { wide: 'focus', focus: 'off', off: 'wide' };
 
 const eye = (world, next, tall = 1.4) => ({ x: next.x, y: world.height(next.x, next.z) + tall, z: next.z });
 
@@ -58,6 +62,41 @@ export function isSupply(kind) {
   return kind === 'ammo';
 }
 
+// Fixed non-upgradable flashlight beam settings
+export function beamSettings(mode = 'wide') {
+  const focus = mode === 'focus';
+  return { range: focus ? 22 : 15, angle: focus ? 0.25 : 0.49 };
+}
+
+export function activeBeams(run) {
+  return run.player.flashlight ? [run.beam].filter(Boolean) : [];
+}
+
+export function resolvedBeam(world, lamp, head) {
+  if (!lamp || !head) return lamp;
+  const delta = { x: lamp.origin.x - head.x, y: lamp.origin.y - head.y, z: lamp.origin.z - head.z };
+  const range = Math.hypot(delta.x, delta.y, delta.z);
+  if (range <= 0.01) return lamp;
+  const ray = norm(delta), hit = world.raycast(head, ray, range, false);
+  if (!hit) return lamp;
+  return hit.t > 0.12 ? { ...lamp, origin: rayPoint(head, ray, hit.t - 0.12) } : null;
+}
+
+export function resolvePlayerBeam(run, lamp, head) {
+  const p = run.player, mode = p.beam;
+  if (!mode || mode === 'off') return null;
+  const cast = resolvedBeam(run.world, lamp, head);
+  return cast ? { ...cast, ...beamSettings(mode), mode } : null;
+}
+
+export function inBeam(world, beam, at) {
+  if (!beam) return false;
+  const dx = at.x - beam.origin.x, dy = at.y - beam.origin.y, dz = at.z - beam.origin.z;
+  const d = Math.hypot(dx, dy, dz);
+  return d < beam.range && dx * beam.ray.x + dy * beam.ray.y + dz * beam.ray.z >= Math.cos(beam.angle) * d
+    && world.clear(beam.origin, at);
+}
+
 function norm(v) {
   const length = Math.hypot(v.x, v.y, v.z);
   return length > 0 ? { x: v.x / length, y: v.y / length, z: v.z / length } : POINT;
@@ -67,13 +106,6 @@ export function enemyPose(enemy) {
   const [chin, brow, chest, hips] = animatedAnchors(enemy, ENEMIES[enemy.kind].windup, 4);
   const center = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 });
   return { head: center(chin, brow), torso: center(chest, hips) };
-}
-
-export function enemyVitalPoints(enemy) {
-  const points = animatedAnchors(enemy, ENEMIES[enemy.kind].windup);
-  return (enemy.vitalJoints || [{ joint: enemy.vitalJoint ?? 2, destroyed: false }])
-    .filter(d => !d.destroyed)
-    .map(d => ({ joint: d.joint, point: points[d.joint] }));
 }
 
 function raySphere(origin, ray, center, radius) {
@@ -137,31 +169,13 @@ function traceRay(world, origin, ray, range, targets) {
   const limit = solid?.t ?? range;
   const hits = [];
   for (const { e, points, radii } of targets) {
-    // Only lit green weak-point dots can be destroyed during the muzzle illumination window
-    if (e.revealed) {
-      let bestVitalT = limit;
-      let hitDotIdx = -1;
-      const dots = e.vitalJoints || [{ joint: e.vitalJoint ?? 2, destroyed: false }];
-      for (let idx = 0; idx < dots.length; idx++) {
-        if (dots[idx].destroyed) continue;
-        const tVital = raySphere(origin, ray, points[dots[idx].joint], VITAL_HIT_RADIUS);
-        if (tVital < bestVitalT) {
-          bestVitalT = tVital;
-          hitDotIdx = idx;
-        }
-      }
-      if (hitDotIdx >= 0) {
-        hits.push({ e, t: bestVitalT, zone: 'vital', vitalHit: true, dotIndex: hitDotIdx, point: rayPoint(origin, ray, bestVitalT) });
-        continue;
-      }
-    }
     let best = limit, zone = null;
     for (const [i, [a, b, tag]] of HIT_SEGMENTS.entries()) {
       const radius = tag === 'head' ? radii[i] * 1.18 : radii[i];
       const t = rayCapsule(origin, ray, points[a], points[b], radius);
       if (t < best) { best = t; zone = tag; }
     }
-    if (zone) hits.push({ e, t: best, zone, vitalHit: false, point: rayPoint(origin, ray, best) });
+    if (zone) hits.push({ e, t: best, zone, head: zone === 'head', point: rayPoint(origin, ray, best) });
   }
   hits.sort((a, b) => a.t - b.t);
   return { hits, cover: solid && { zone: 'cover', surface: solid.kind, point: rayPoint(origin, ray, solid.t) } };
@@ -175,7 +189,7 @@ export function traceAim(run, aim) {
   const { hits, cover } = traceRay(run.world, aim.origin, ray, range, prepareTargets(run, aim.origin, ray, range));
   if (!hits.length) return cover;
   const first = hits[0];
-  return { ...first, zone: first.vitalHit ? 'head' : 'armor' };
+  return { ...first, zone: first.head ? 'head' : 'armor' };
 }
 
 function emit(run, type, data = {}) {
@@ -215,9 +229,9 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
       protection: 0,
       cooldown: 0,
       reload: null,
-      flashlight: false,
-      battery: 0,
-      beam: 'off',
+      flashlight: true,
+      battery: 1,
+      beam: 'wide',
       upgrades,
       kills: 0,
       headshots: 0,
@@ -242,7 +256,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
     nextTacticsTick: 0,
     lastChunkCheckX: -1e9,
     lastChunkCheckZ: -1e9,
-    metrics: { shots: 0, dryFire: 0, deflects: 0, wallBreaks: 0, roundsPicked: 0, upgrades: 0, hazardsTriggered: 0, pickups: {}, damage: {} },
+    metrics: { shots: 0, dryFire: 0, wallBreaks: 0, roundsPicked: 0, upgrades: 0, hazardsTriggered: 0, pickups: {}, damage: {} },
   };
 
   syncLoot(run);
@@ -251,21 +265,10 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
 }
 
 export function addEnemy(run, kind, x, z, meta = {}) {
-  const vitalJoints = meta.vitalJoints
-    ? meta.vitalJoints.map(j => (typeof j === 'number' ? { joint: j, destroyed: false } : { ...j }))
-    : rollVitalJoints(run.rng, run.rules.maxDots || 3);
   const enemy = {
     id: run.nextId++,
     kind,
     appearance: run.rng() < 0.5 ? kind : `${kind}-alt`,
-    vitalJoints,
-    get vitalJoint() {
-      const alive = this.vitalJoints.find(d => !d.destroyed);
-      return alive ? alive.joint : this.vitalJoints[0].joint;
-    },
-    litUntil: -1,
-    revealed: false,
-    revealGlow: 0,
     x,
     z,
     y: run.world.height(x, z),
@@ -318,7 +321,7 @@ export function addEnemy(run, kind, x, z, meta = {}) {
   };
   enemy.previousTransform.yaw = enemy.yaw;
   if (!run.roster.includes(enemy)) run.roster.push(enemy);
-  if (!run.enemies.includes(enemy) && distance(enemy, run.player) <= 38) run.enemies.push(enemy);
+  if (!run.enemies.includes(enemy) && distance(enemy, run.player) <= 24) run.enemies.push(enemy);
   return enemy;
 }
 
@@ -354,61 +357,44 @@ function noise(run, kind, origin, radius, span, zoneId = null) {
   if (run.noises.length > 40) run.noises.shift();
 }
 
-function flashIlluminate(run, flashOrigin, center) {
+function alertMuzzleZone(run, flashOrigin) {
   const { world, time } = run;
   const shooterZoneId = world.zoneAt(flashOrigin.x, flashOrigin.z)?.id ?? null;
-  const minDot = Math.cos(1.18); // ~135 degree wide muzzle light spill + close room bounce
   for (const e of run.enemies) {
     if (e.dead) continue;
-    const dx = e.x - flashOrigin.x, dz = e.z - flashOrigin.z;
-    const flatDist = Math.hypot(dx, dz);
+    const flatDist = distance(e, flashOrigin);
     if (flatDist > MUZZLE_LIGHT_RANGE) continue;
-    const torso = eye(world, e, ENEMIES[e.kind].height * 0.58);
-    const sameZone = shooterZoneId != null && e.zoneId === shooterZoneId;
-    if (flatDist > 0.25 && !sameZone) {
-      const rayDot = (dx * center.x + dz * center.z) / flatDist;
-      if (rayDot < minDot) continue;
-    } else if (flatDist > 8.5) {
-      const rayDot = (dx * center.x + dz * center.z) / flatDist;
-      if (rayDot < minDot) continue;
-    }
-    if (!world.clear(flashOrigin, torso)) continue;
-    e.litUntil = time + MUZZLE_REVEAL_WINDOW;
-    e.revealed = true;
-    e.revealGlow = 1;
-    // Zombies illuminated by muzzle flash immediately know the gunshot flash origin
-    if (e.zoneId === shooterZoneId || flatDist < 12) {
-      e.dormant = false;
-      e.alerted = true;
-      e.memory = {
-        x: flashOrigin.x,
-        z: flashOrigin.z,
-        score: 1.8,
-        reason: 'muzzle flash',
-        id: 'flash',
-        chase: true,
-        until: time + run.rules.memorySeconds,
-      };
-    }
+    if (e.zoneId !== shooterZoneId && flatDist > 10) continue;
+    if (!world.clear(flashOrigin, eye(world, e, ENEMIES[e.kind].height * 0.58))) continue;
+    e.dormant = false;
+    e.alerted = true;
+    e.memory = {
+      x: flashOrigin.x,
+      z: flashOrigin.z,
+      score: 1.8,
+      reason: 'muzzle flash',
+      id: 'flash',
+      chase: true,
+      until: time + run.rules.memorySeconds,
+    };
   }
 }
 
-function eliminate(run, e, vital) {
+function eliminate(run, e, headshot) {
   const p = run.player;
   e.dead = true;
-  e.revealed = false;
-  e.litUntil = -1;
+  e.hp = 0;
   p.kills++;
-  if (vital) p.headshots++;
+  if (headshot) p.headshots++;
   run.corpses.push({
     ...e,
-    headshot: vital,
+    headshot,
     diedAt: run.time,
     fallAge: 0,
     fallFrom: enemyMotion(e, ENEMIES[e.kind].windup),
   });
   if (run.corpses.length > 20) run.corpses.shift();
-  emit(run, 'kill', { ...enemyPose(e).torso, kind: e.kind, headshot: vital });
+  emit(run, 'kill', { ...enemyPose(e).torso, kind: e.kind, headshot });
   if (run.rng() < 0.45) setLoot(run, 'ammo', e.x, e.z, undefined, 4 + Math.floor(run.rng() * 4));
 }
 
@@ -423,7 +409,6 @@ export function shoot(run, aim) {
     if (startReload(run)) return;
     run.metrics.dryFire++;
     p.cooldown = 0.34;
-    // Empty weapon emits a weak dry-fire orange glint (~3.5 m) only: helps spot walls/doors without exposing dots
     emit(run, 'dry', {
       reason: 'Out of ammo — weak spark',
       x: flashOrigin.x, y: flashOrigin.y, z: flashOrigin.z,
@@ -464,8 +449,8 @@ export function shoot(run, aim) {
       const penetrates = 1 + (p.weapon === 'shotgun' && shot !== 0 ? 0 : p.upgrades.pierce);
       for (let i = 0; i < Math.min(penetrates, candidates.length); i++) {
         const hit = candidates[i];
-        const current = hits.get(hit.e) || { dotIndices: [], leg: false, point: hit.point };
-        if (hit.vitalHit && !current.dotIndices.includes(hit.dotIndex)) current.dotIndices.push(hit.dotIndex);
+        const current = hits.get(hit.e) || { head: false, leg: false, point: hit.point };
+        if (hit.head) current.head = true;
         if (hit.zone === 'leg') current.leg = true;
         hits.set(hit.e, current);
       }
@@ -481,30 +466,26 @@ export function shoot(run, aim) {
       noise(run, 'shriek', enemy, 12, 1.8, enemy.zoneId);
       enemyVoice(run, enemy, 'shriek');
 
-      if (hit.dotIndices.length) {
-        for (const idx of hit.dotIndices) {
-          if (enemy.vitalJoints[idx]) enemy.vitalJoints[idx].destroyed = true;
-        }
-        const remaining = enemy.vitalJoints.filter(d => !d.destroyed).length;
-        emit(run, 'impact', { ...hit.point, surface: 'body' });
-        emit(run, 'dotHit', { ...hit.point, remaining, total: enemy.vitalJoints.length, id: enemy.id });
-        if (remaining === 0) eliminate(run, enemy, true);
+      // Regular zombies: headshot = instant kill, body = 2-3 hits.
+      // Brutes (6 HP): 3 headshots (2 dmg each) or 6 body shots (1 dmg each).
+      const dmg = hit.head ? (enemy.kind === 'brute' ? 2 : enemy.hp) : 1;
+      enemy.hp -= dmg;
+      emit(run, 'impact', { ...hit.point, surface: 'body' });
+
+      if (enemy.hp <= 0) {
+        eliminate(run, enemy, hit.head);
       } else {
-        run.metrics.deflects++;
         enemy.stun = 0.08 + p.upgrades.damage * 0.04;
         enemy.hitFrom = attackDirection(enemy, center);
         enemy.hitAge = 0;
         if (hit.leg) enemy.slow = 0.6;
-        emit(run, 'impact', { ...hit.point, surface: 'armor' });
-        emit(run, 'deflect', { ...hit.point, revealed: enemy.revealed, vitalJoint: enemy.vitalJoint });
       }
     }
   } else {
     emit(run, 'impact', { ...blocked.point, surface: blocked.surface });
   }
 
-  // Illuminate zombies in the room / shot cone AFTER traceRay so blind unlit shots cannot accidentally kill
-  flashIlluminate(run, flashOrigin, center);
+  alertMuzzleZone(run, flashOrigin);
 }
 
 export function startReload(run) {
@@ -582,7 +563,7 @@ function take(run, loot, message) {
   emit(run, 'pickup', { kind: loot.kind, message });
 }
 
-function perception(run, e, gap) {
+function perception(run, e, gap, lamps) {
   const { world, player: p, time, rules } = run;
   const origin = eye(world, e, ENEMIES[e.kind].height * 0.87);
   const playerEye = eye(world, p, p.eyeHeight * 0.8);
@@ -590,7 +571,7 @@ function perception(run, e, gap) {
   let best = null;
   const offer = candidate => { if (!best || candidate.score > best.score) best = candidate; };
 
-  // Blind zombie awareness in total darkness: only detects at physical bump/very-close radius (~1.25-1.65 m)
+  // Blind zombie awareness in total darkness: only detects at physical bump radius (~1.25-1.65 m)
   const playerZone = world.zoneAt(p.x, p.z);
   const sameZone = playerZone && e.zoneId === playerZone.id;
   const blindRange = rules.blindSight + (sameZone ? 0.25 : 0);
@@ -602,7 +583,21 @@ function perception(run, e, gap) {
     if (firstTouch) enemyVoice(run, e, 'shriek');
   }
 
-  // Noise events (gunshots, shrieks, pebbles/branches/puddles, loud footsteps) scoped cleanly to same zone or unoccluded nearby threshold
+  // Flashlight beam touching zombie or doorway splash draws zombie toward light origin
+  if (lamps.length) {
+    const torsoPt = { ...origin, y: ENEMIES[e.kind].height * 0.58 };
+    const groundPt = { ...origin, y: 0.28 };
+    for (const light of lamps) {
+      if (gap >= light.range + 4) continue;
+      if (inBeam(world, light, origin) || inBeam(world, light, torsoPt) || inBeam(world, light, groundPt)) {
+        e.dormant = false;
+        e.alerted = true;
+        offer(get(light.origin.x, light.origin.z, 1.35 - gap / (light.range + 8) * 0.5, 'flashlight', 'lamp', true));
+      }
+    }
+  }
+
+  // Noise events (gunshots, shrieks, pebbles/branches/puddles, loud footsteps) scoped cleanly to zone / unoccluded threshold
   for (let i = run.noises.length - 1; i >= 0; i--) {
     const n = run.noises[i], age = time - n.born, d = distance(origin, n.origin);
     if (age > n.span || d >= n.radius) continue;
@@ -625,7 +620,6 @@ function perception(run, e, gap) {
     e.memory = { ...best, until: time + rules.memorySeconds };
   }
 
-  // If the player slipped away quietly in the dark, investigate the last heard/flashed spot, then resume wall prowl
   if (!best && e.memory?.until > time && distance(e, e.memory) > 0.9) {
     best = { ...e.memory, score: 0.2, reason: 'searching', chase: true };
   }
@@ -778,7 +772,6 @@ function navigate(run, e, tx, tz, dt) {
   const progress = e.stumble > 0 ? 1 - e.stumble / e.stumbleDuration : 0;
   const stumblePace = progress > 0 ? 1 - 0.43 * Math.sin(Math.PI * progress) + 0.16 * Math.sin(2 * Math.PI * progress) : 1;
 
-  // Variable zombie speeds up to max 3.0 mph (1.34 m/s); slow random prowling when unalerted
   const baseSpeed = e.target?.chase ? Math.min(run.rules.speedLimit, cfg.chaseSpeed * run.rules.aggroScale) : cfg.speed;
   const speedTarget = (isBurst ? run.rules.speedLimit : baseSpeed * e.pace * stepPace * stumblePace)
     * (e.slow > 0 ? 0.58 : 1) * (e.stun > 0 ? 0.45 : 1) * (e.recover > 0.32 ? 0.35 : 1);
@@ -794,7 +787,6 @@ function navigate(run, e, tx, tz, dt) {
     const probeX = e.x + vector.x * probe;
     const probeZ = e.z + vector.z * probe;
     if (world.blocks(probeX, probeZ, radius + 0.06)) continue;
-    // Hard doorway boundary: zombies NEVER cross out of their assigned room/hallway
     const stepX = vector.x * dt * speed, stepZ = vector.z * dt * speed;
     if (zone && !isInsideOwnZone(labyrinth, zone, e.x + stepX, e.z + stepZ)) continue;
     world.move(e, stepX, stepZ, radius);
@@ -818,7 +810,7 @@ function navigate(run, e, tx, tz, dt) {
   updateEnemyFooting(world, e, cfg.windup, distance(run.player, e));
 }
 
-function updateEnemies(run, dt) {
+function updateEnemies(run, dt, lamps) {
   const { player: p, time } = run;
   syncActiveRoster(run);
   if (time >= run.nextTacticsTick) {
@@ -831,14 +823,9 @@ function updateEnemies(run, dt) {
     const gap = distance(e, p);
 
     if (time >= e.nextThink) {
-      perception(run, e, gap);
+      perception(run, e, gap, lamps);
       e.nextThink = time + (gap < 18 ? 0.18 : 0.38) + run.rng() * 0.08;
     }
-
-    // Muzzle flash fade window (~0.55 s) controls green weak-spot visibility & vulnerability
-    const lit = time < (e.litUntil ?? -1);
-    e.revealed = lit;
-    e.revealGlow = lit ? clamp((e.litUntil - time) / MUZZLE_REVEAL_WINDOW, 0, 1) : 0;
 
     e.stun = Math.max(0, e.stun - dt);
     e.slow = Math.max(0, e.slow - dt);
@@ -857,6 +844,19 @@ function updateEnemies(run, dt) {
     e.route = nav;
     navigate(run, e, nav.x, nav.z, dt);
     voiceCadence(run, e, gap);
+  }
+}
+
+export function inspectFlashlights(run, input) {
+  const p = run.player;
+  if (input.toggleLight) {
+    if (!p.flashlight && p.battery <= 0) emit(run, 'light', { on: false, empty: true });
+    else { p.flashlight = !p.flashlight; emit(run, 'light', { on: p.flashlight }); }
+  }
+  if (input.toggleBeam) {
+    p.beam = beamCycle[p.beam] || 'wide';
+    if (p.beam !== 'off') p.flashlight = true;
+    emit(run, 'beam', { mode: p.beam });
   }
 }
 
@@ -904,6 +904,19 @@ export function stepRun(run, input = {}, dt = STEP) {
 
   if (input.reload) startReload(run);
   if (input.cycleWeapon) cycleWeapon(run);
+  inspectFlashlights(run, input);
+
+  // Fixed non-upgradable 30s flashlight battery
+  const activeLight = p.flashlight && p.beam !== 'off' && !input.lampUnavailable;
+  if (activeLight) {
+    p.battery = Math.max(0, p.battery - dt / FLASHLIGHT_RUNTIME);
+    if (p.battery === 0) {
+      p.flashlight = false;
+      emit(run, 'light', { on: false, empty: true });
+    }
+  } else {
+    p.battery = Math.min(1, p.battery + dt / 5);
+  }
 
   const moveX = input.moveX || 0, moveZ = input.moveZ || 0;
   const length = Math.hypot(moveX, moveZ);
@@ -946,14 +959,15 @@ export function stepRun(run, input = {}, dt = STEP) {
 
   takeLoot(run, input.interact);
 
-  // Reach single outer perimeter Exit threshold to escape the labyrinth
   const exit = world.exit;
   if (distance(p, { x: exit.doorX, z: exit.doorZ }) < 1.45 || (distance(p, exit) < 1.0 && world.zoneAt(p.x, p.z)?.id === exit.zoneId && distance(p, { x: exit.doorX, z: exit.doorZ }) < 1.85)) {
     run.status = 'escaped';
     emit(run, 'extraction', { ...exit });
   }
 
-  updateEnemies(run, dt);
+  const head = eye(world, p, p.eyeHeight);
+  run.beam = activeLight ? resolvePlayerBeam(run, input.lamp, head) : null;
+  updateEnemies(run, dt, activeBeams(run));
   for (const corpse of run.corpses) corpse.fallAge = Math.min(1.5, corpse.fallAge + dt);
   return run.events;
 }

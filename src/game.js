@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  BUILD, createRun, GUNS, LOOT, STEP, stepRun, traceAim,
+  BUILD, createRun, GUNS, inspectFlashlights, LOOT, resolvePlayerBeam, STEP, stepRun, traceAim,
 } from './simulation.js';
 import { createPresentation, loadArt } from './presentation.js';
 import { clamp } from './world.js';
@@ -67,7 +67,7 @@ let aimHit = null, shotgunFiredAt = -Infinity, calibrating = false, mapMode = fa
 const direction0 = new THREE.Vector3(0, 0, -1);
 const vertical = new THREE.Vector3(0, 1, 0);
 const text = (id, value) => { $(id).textContent = value; };
-const objective = 'Fire to light your path & expose green weak spots. Find the perimeter EXIT.';
+const objective = 'Use your flashlight & gunfire carefully. Headshot zombies or escape the perimeter EXIT.';
 
 function clearInput() {
   held.clear();
@@ -203,8 +203,11 @@ function inspectDeath() {
   fillResults('The light went out.', deathMessage, false);
   $('result-initials').value = settings.initials;
   resultScore();
+  const p = run.player;
+  p.battery = 1;
+  p.flashlight = true;
   text('death-view-reason', deathMessage);
-  text('death-view-controls', touch ? 'Drag to look · Results for scoreboard' : 'Drag to look · Esc for results');
+  text('death-view-controls', touch ? 'Drag to look · Aim with light controls' : 'Drag to look · F / Q for light · Esc for results');
   lookAround();
   if (document.pointerLockElement === canvas) document.exitPointerLock();
 }
@@ -375,7 +378,7 @@ renderer.xr.addEventListener('sessionend', () => {
   showHome();
 });
 
-const keyboard = { KeyR: 'reload', Tab: 'cycleWeapon', KeyE: 'interact', Space: 'fire' };
+const keyboard = { KeyR: 'reload', Tab: 'cycleWeapon', KeyF: 'toggleLight', KeyQ: 'toggleBeam', KeyE: 'interact', Space: 'fire' };
 document.addEventListener('keydown', event => {
   if (event.target.matches?.('input, textarea')) return;
   if (phase === 'playing') {
@@ -388,6 +391,8 @@ document.addEventListener('keydown', event => {
     if (event.code === 'Escape' || event.code === 'Enter') {
       event.preventDefault();
       openResults();
+    } else if (event.code === 'KeyF' || event.code === 'KeyQ') {
+      inspectFlashlights(run, { [keyboard[event.code]]: true });
     }
   } else if (phase === 'paused' && !event.repeat) {
     if (event.code === 'Escape') resume();
@@ -470,7 +475,8 @@ for (const btn of document.querySelectorAll('[data-touch]')) {
   btn.addEventListener('pointerdown', e => {
     e.preventDefault();
     const action = btn.dataset.touch;
-    if (action === 'pause') pause();
+    if (phase === 'inspect') inspectFlashlights(run, { [action]: true });
+    else if (action === 'pause') pause();
     else if (action === 'openMap') openMapView();
     else queued[action] = true;
   });
@@ -514,6 +520,7 @@ function trackedView(stereo, lead = 0) {
     lead, rig.quaternion, pumpTravel);
   view.tracking.pumpTravel = pumpTravel;
   view.aim = mountedAim(view.tracking.weapon, layout, view.view);
+  view.beam = mountedAim(view.tracking.lamp, layouts.flashlight, view.view);
   return view;
 }
 
@@ -538,17 +545,12 @@ function handleEvent(batch) {
     } else if (event.type === 'pickup') setNotice(event.message, 3.0);
     else if (event.type === 'extraction') inspectEscape();
     else if (event.type === 'weaponSwitch') setNotice(GUNS[event.weapon].name, 1.25);
-    else if (event.type === 'dotHit') {
-      xr.haptic('dotHit', settings, handling.braced);
-      if (event.remaining > 0) setNotice(`${event.remaining} green spot${event.remaining > 1 ? 's' : ''} left`, 0.9);
-    } else if (event.type === 'hazardStep') {
+    else if (event.type === 'light' && event.empty) setNotice('Battery depleted. Recharging.', 2.2);
+    else if (event.type === 'hazardStep') {
       xr.haptic('hazardStep', settings);
       setNotice(event.quiet ? `Brushed ${event.kind}` : `Stepped in ${event.kind}!`, 1.1);
     } else if (event.type === 'wallBump') {
       xr.haptic('wallBump', settings);
-    } else if (event.type === 'deflect' && run.time > deflectHintAt + 2.8) {
-      deflectHintAt = run.time;
-      setNotice(event.revealed ? 'Hit the glowing GREEN spots!' : 'Fire to reveal green weak spots first!', 2.0);
     } else if (event.type === 'shot') {
       if (event.weapon === 'shotgun') shotgunFiredAt = run.time;
       handling.kick(settings.leftHanded);
@@ -569,16 +571,16 @@ function perfReport() {
 function updateHUD(force = false) {
   if (!force && run.time < hudAt) return;
   hudAt = run.time + 0.07;
-  const p = run.player;
+  const p = run.player, display = Math.ceil(p.battery * 100);
   text('clock', formatTime(run.time));
   text('hud-parts', DIFFICULTIES[run.difficulty].name.toUpperCase());
   text('weapon-name', GUNS[p.weapon].name.toUpperCase());
   const rounds = count => String(count).padStart(2, '0');
   $('rounds').firstChild.textContent = rounds(p.ammo) + ' ';
   $('rounds').lastChild.textContent = '/ ' + p.reserve;
-  const flashHint = p.ammo > 0 ? 'MUZZLE FLASH READY' : p.reserve > 0 ? 'RELOAD' : 'EMPTY · SPARK ONLY';
-  text('light-text', flashHint);
-  $('charge').style.transform = 'scaleX(' + (p.ammo > 0 ? 1 : 0.12) + ')';
+  const light = (p.flashlight ? p.beam.toUpperCase() : 'RECHARGING') + ' · ' + display + '%';
+  text('light-text', light);
+  $('charge').style.transform = 'scaleX(' + p.battery + ')';
   text('armor', '◆'.repeat(p.armor) + '◇'.repeat(Math.max(0, 1 - p.armor)));
   $('armor').setAttribute('aria-label', p.armor + ' armor charges');
   text('notice', run.time < noticeUntil ? notice : perfReport());
@@ -628,9 +630,9 @@ function xrUI(sample, trackedView) {
         title: 'The Last Night',
         lines: [
           'Difficulty: ' + DIFFICULTIES[settings.difficulty].name + '   (X changes size & danger)',
-          'Dark Labyrinth: Gunfire is your only light. Left hand stabilizes weapon.',
-          'Reveal & destroy 1-3 green weak spots per zombie. Avoid puddles, pebbles & twigs.',
-          'Find ammo caches and reach the single perimeter EXIT.',
+          'Dark Labyrinth: Non-upgradable flashlight + muzzle flash. Avoid puddles, pebbles & twigs.',
+          'Headshots kill regular zombies instantly (2-3 body shots). Brutes take 3 headshots / 6 body.',
+          'Manage scarce ammo and escape through the single perimeter EXIT.',
         ],
         hint: sample.tracked ? 'WEAPON TRIGGER  ·  START' : 'CONNECT BOTH CONTROLLERS',
         second: 'A  ·  GUN ANGLE',
@@ -709,8 +711,9 @@ function simulate(t, sample, stereo) {
     const aimed = trackedView(stereo);
     const input = {
       ...state, ...queued, roomX, roomZ,
-      aim: aimed.aim,
+      aim: aimed.aim, lamp: aimed.beam,
       weaponUnavailable: stereo && !aimed.aim,
+      lampUnavailable: stereo && !aimed.beam,
     };
     roomX = roomZ = 0;
     for (const key of Object.keys(queued)) delete queued[key];
@@ -749,6 +752,7 @@ function frame(now, xrFrame) {
         else if (phase === 'paused' && sample.fire && sample.weaponTracked) resume();
       } else if (phase === 'inspect') {
         if (sample.reload) openResults();
+        else inspectFlashlights(run, sample);
       } else if (phase === 'results') {
         if (sample.reload && run.status === 'dead') lookAround();
         else if (performance.now() - deathAt > 950) {
@@ -759,7 +763,7 @@ function frame(now, xrFrame) {
         if (sample.pause) pause('Survival Kit & Pause', true);
         else if (!sample.weaponTracked && sample.missingFor > 0.5) pause('Weapon controller tracking was lost.');
         else {
-          for (const key of ['reload', 'cycleWeapon', 'fire', 'interact']) {
+          for (const key of ['reload', 'cycleWeapon', 'fire', 'toggleLight', 'toggleBeam', 'interact']) {
             if (sample[key]) queued[key] = true;
           }
           roomX += sample.roomX; roomZ += sample.roomZ;
@@ -783,9 +787,11 @@ function frame(now, xrFrame) {
   const active = phase === 'playing', inspecting = phase === 'inspect' || phase === 'extracting', p = run.player;
   const laser = active && settings.laserDot;
   aimHit = laser && !p.reload && view.aim ? traceAim(run, view.aim) : null;
+  const lightsActive = (active || inspecting) && p.flashlight;
+  const beam = lightsActive ? resolvePlayerBeam(run, view.beam, view.view?.position) : null;
 
   presentation.update(run, dt, settings, view.tracking, {
-    active, inspecting, stereo, calibration: calibrating, menu: phase === 'menu' && !stereo,
+    active, inspecting, stereo, calibration: calibrating, menu: phase === 'menu' && !stereo, beam,
     aim: active ? view.aim : null, aimHit,
     viewpoint: view.view?.position,
     enemyAlpha: active ? clamp(accumulator / STEP, 0, 1) : 1,

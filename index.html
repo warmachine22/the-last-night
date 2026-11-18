@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#111919">
-  <meta name="description" content="The Last Night — Meta Quest WebXR dark labyrinth survival horror illuminated solely by gun muzzle fire.">
+  <meta name="description" content="The Last Night — Meta Quest WebXR dark labyrinth survival horror.">
   <title>The Last Night</title>
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./game.js"></script>
@@ -15,12 +15,12 @@
   <main id="shell">
     <header class="masthead">
       <strong>THE LAST NIGHT</strong>
-      <span id="build">BUILD 2.0.0</span>
+      <span id="build">BUILD 2.0.1</span>
     </header>
     <section class="hero" aria-labelledby="title" id="home">
       <p class="eyebrow">BLACKWATER LABYRINTH · WEBXR</p>
       <h1 id="title">THE LAST<br><span>NIGHT</span></h1>
-      <p class="lede">Start in the center of a pitch-black labyrinth with only your firearm.<br>Muzzle fire is your only light—expose 1–3 green dots per zombie, avoid noise hazards, and reach the single Exit.</p>
+      <p class="lede">Start in the center of a dark labyrinth. Manage your fixed flashlight battery and scarce ammo.<br>Headshots kill regular zombies instantly; Brutes take 3 headshots or 6 body shots.</p>
       <label class="difficulty">Difficulty (Maze Size)
         <select id="difficulty"></select>
       </label>
@@ -45,16 +45,16 @@
         <button data-back>Back to menu</button>
       </div>
       <section class="help-section">
-        <h3>Muzzle-Flash Illumination</h3>
-        <p>You carry no flashlight—your offhand is strictly for bracing your weapon. Firing illuminates surrounding walls, doorways, ground hazards, and zombies for a split second. Empty magazines emit only a dim 3.5 m flint spark that will not expose weak spots.</p>
+        <h3>Flashlight &amp; Muzzle Fire</h3>
+        <p>You carry a non-upgradable 30-second flashlight (wide or focused beam) alongside bright weapon muzzle fire. Light and gunfire draw blind room zombies toward you—shut the light off and slip into dark corners to break pursuit.</p>
       </section>
       <section class="help-section">
-        <h3>Blind Zombies &amp; Multi-Dot Weak Spots</h3>
-        <p>1–5 zombies ambush inside each room and patrol corridors, never crossing doorways. They are equally blind in the dark—moving toward gunshots and floor noise (or catching you if you linger motionless). Each zombie carries 1 to 3 dark-green skeletal weak points visible right after a gunshot flash; destroy all green dots to kill it.</p>
+        <h3>Combat &amp; Room-Bound Threats</h3>
+        <p>1–5 zombies ambush inside each room and patrol corridors without crossing doorways. Regular zombies die from 1 headshot or 2–3 body shots; Brutes require 3 headshots or 6 body shots. Moving slowly avoids loud footsteps and alerts zombies inside that room far less.</p>
       </section>
       <section class="help-section">
         <h3>Hazards, Ammo &amp; Escape</h3>
-        <p>Watch the floor when shooting: pebbles, dry branches, and puddles alert nearby room zombies to rush the sound unless crept over slowly. Scavenge spare ammo boxes, Shotguns, and Carbines as you hunt for the single dimly lit red EXIT on the outer wall.</p>
+        <p>Watch for pebbles, dry branches, and puddles on the floor—stepping in them alerts zombies in that room. Scavenge spare rounds, Shotguns, and Carbines while hunting for the single perimeter EXIT.</p>
       </section>
       <button data-back>Back to menu</button>
     </section>
@@ -67,6 +67,7 @@
           <dt>Move / Look</dt><dd>WASD / mouse</dd>
           <dt>Move quietly</dt><dd>Hold Shift</dd>
           <dt>Fire / Reload</dt><dd>Click or Space / R</dd>
+          <dt>Light / Beam</dt><dd>F / Q</dd>
           <dt>Equip / Cycle weapon</dt><dd>E / Tab</dd>
           <dt>Survival Kit</dt><dd>M or I</dd>
           <dt>Pause</dt><dd>Esc</dd>
@@ -76,6 +77,7 @@
           <dt>Creep quietly</dt><dd>Light thumbstick tilt</dd>
           <dt>Fire / Reload</dt><dd>Weapon trigger / right A</dd>
           <dt>Cycle weapons</dt><dd>Right B</dd>
+          <dt>Light / Beam</dt><dd>Light trigger / left X</dd>
           <dt>Pick up weapon</dt><dd>Weapon grip</dd>
           <dt>Two-handed aim</dt><dd>Hold offhand grip near barrel</dd>
           <dt>Pause / Kit</dt><dd>Left Y (Right B switches to Kit)</dd>
@@ -83,7 +85,7 @@
         <div><h3>Touch</h3><dl>
           <dt>Move / Look</dt><dd>Left stick / drag right side</dd>
           <dt>Fire / Reload / Equip</dt><dd>On-screen buttons</dd>
-          <dt>Kit / Cycle / Pause</dt><dd>Top utility buttons</dd>
+          <dt>Light / Beam / Kit</dt><dd>Top utility buttons</dd>
         </dl></div>
       </div>
       <button data-back>Back</button>
@@ -123,7 +125,7 @@
       </details>
       <button data-back>Done</button>
     </section>
-    <footer class="menu-footer"><span>PROCEDURAL LABYRINTH · MUZZLE LIGHT ONLY</span><span>HEADPHONES RECOMMENDED</span></footer>
+    <footer class="menu-footer"><span>PROCEDURAL LABYRINTH · FLASHLIGHT &amp; MUZZLE LIGHT</span><span>HEADPHONES RECOMMENDED</span></footer>
   </main>
 
   <aside id="hud" hidden aria-label="Run status">
@@ -132,7 +134,7 @@
       <div class="hud-right"><small id="weapon-name">SERVICE PISTOL</small><strong id="rounds">12 <em>/ 20</em></strong></div>
     </div>
     <div class="hud-bottom">
-      <div id="light-meter"><small id="light-text">MUZZLE FLASH READY</small><div class="battery-track"><i id="charge"></i></div></div>
+      <div id="light-meter"><small id="light-text">WIDE · 100%</small><div class="battery-track"><i id="charge"></i></div></div>
       <div class="hud-right"><small>ARMOR</small><strong class="pips" id="armor" aria-label="No armor">◇</strong></div>
     </div>
     <div id="crosshair" aria-hidden="true"></div>
@@ -151,7 +153,7 @@
     <div id="look-pad"></div>
     <div id="stick" aria-label="Move"><i></i></div>
     <div class="touch-utilities">
-      <button id="touch-cycle" data-touch="cycleWeapon" disabled>Cycle</button><button id="touch-map" data-touch="openMap">Kit</button><button data-touch="pause">Pause</button>
+      <button id="touch-cycle" data-touch="cycleWeapon" disabled>Cycle</button><button id="touch-light" data-touch="toggleLight">Light</button><button id="touch-beam" data-touch="toggleBeam">Beam</button><button id="touch-map" data-touch="openMap">Kit</button><button data-touch="pause">Pause</button>
     </div>
     <div class="touch-main">
       <button id="touch-interact" data-touch="interact">Equip</button><button data-touch="reload">Reload</button><button id="touch-fire">Fire</button>

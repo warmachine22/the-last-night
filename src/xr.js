@@ -14,9 +14,12 @@ const axis = (gamepad, index) => gamepad?.axes?.[gamepad.axes.length >= 4 ? inde
 
 export function questButtons(right, left, leftHanded) {
   const weapon = leftHanded ? left : right;
+  const light = leftHanded ? right : left;
   return {
     fire: button(weapon, 0), interact: button(weapon, 1),
     reload: button(right, 4), cycleWeapon: button(right, 5),
+    toggleLight: button(light, 0),
+    toggleBeam: button(left, 4),
     pause: button(left, 5),
     menuDifficulty: button(left, 4),
     toggleMap: button(right, 5),

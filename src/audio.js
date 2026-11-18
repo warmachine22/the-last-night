@@ -325,7 +325,7 @@ export function createAudio() {
       } else if (e.type === 'reload') {
         play(e.weapon === 'smg' || e.weapon === 'carbine' ? 'reload-smg-short' : e.weapon === 'shotgun' ? 'pump' : 'reload-short',
           { bus: weapons, gain: .35 });
-      } else if (e.type === 'loaded' || e.type === 'reloaded' || e.type === 'dry' || e.type === 'pickup' || e.type === 'weaponSwitch') {
+      } else if (e.type === 'loaded' || e.type === 'reloaded' || e.type === 'dry' || e.type === 'light' || e.type === 'pickup' || e.type === 'weaponSwitch') {
         play('switch', { gain: e.type === 'dry' ? .42 : .23, speed: e.type === 'dry' ? 1.55 : e.type === 'pickup' ? 1.57 : 1 });
       } else if (e.type === 'hazardStep') {
         play(e.kind, { gain: e.quiet ? .25 : .64, loc: e, speed: .9 + Math.random() * .2 });

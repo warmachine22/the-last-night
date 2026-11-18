@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GUNS } from './simulation.js';
 
 const forward = new THREE.Vector3(0, 0, -1);
-const names = [...Object.keys(GUNS), 'glove'];
+const names = [...Object.keys(GUNS), 'flashlight', 'glove'];
 const degrees = Math.PI / 180;
 const foregripGuns = new Set(['shotgun', 'smg', 'carbine']);
 const grabDistance = .15;
@@ -21,7 +21,7 @@ export const gunAngle = value => Math.max(-25, Math.min(25, Math.round(Number.is
 const rotation = (pitch, yaw) => new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
 
 export function toolLayouts(art) {
-  return Object.fromEntries(names.map(name => {
+  const layouts = Object.fromEntries(names.map(name => {
     const scene = art[name].scene;
     scene.updateMatrixWorld(true);
     const socket = label => {
@@ -37,6 +37,14 @@ export function toolLayouts(art) {
     const support = name in GUNS ? socket('SupportSocket').multiplyScalar(scale).add(offset) : null;
     return [name, { scale, offset, muzzle, support }];
   }));
+  const lamp = layouts.flashlight, scale = .45;
+  const rail = layouts.pistol.muzzle.clone().add(new THREE.Vector3(0, -.041, .132));
+  layouts.pistolLamp = {
+    scale: lamp.scale * scale,
+    offset: rail.clone().addScaledVector(lamp.offset, scale),
+    muzzle: rail.clone().addScaledVector(lamp.muzzle, scale),
+  };
+  return layouts;
 }
 
 export function heldPose(pose, stereo) {

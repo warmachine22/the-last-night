@@ -6,7 +6,6 @@ export const DIFFICULTIES = {
     aggroScale: 0.94,
     blindSight: 1.25,
     memorySeconds: 6.5,
-    maxDots: 2,
     ammoScale: 1.15,
   },
   hard: {
@@ -16,7 +15,6 @@ export const DIFFICULTIES = {
     aggroScale: 1.0,
     blindSight: 1.45,
     memorySeconds: 8.5,
-    maxDots: 3,
     ammoScale: 0.95,
   },
   nightmare: {
@@ -26,7 +24,6 @@ export const DIFFICULTIES = {
     aggroScale: 1.05,
     blindSight: 1.65,
     memorySeconds: 10.5,
-    maxDots: 3,
     ammoScale: 0.80,
   },
 };

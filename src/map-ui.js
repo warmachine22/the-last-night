@@ -40,7 +40,7 @@ export function drawFieldMapAndInventory(ctx, width, height, run, hint = '', sec
 
   ctx.fillStyle = '#9aa89b';
   ctx.font = '17px monospace';
-  ctx.fillText('No map available in darkness — use muzzle fire sparingly to read rooms, hallways & sound hazards.', 44, height - 108);
+  ctx.fillText('No map available in darkness — use your fixed 30s flashlight & gunfire wisely.', 44, height - 108);
   ctx.fillText('Find the single perimeter EXIT chamber while keeping spare rounds.', 44, height - 80);
 
   if (hint) {
