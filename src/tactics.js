@@ -56,6 +56,15 @@ export function findMazeStep(labyrinth, fromPos, toPos) {
 // - If the player gets too far away, zombies break chase and return cleanly to e.home
 export function updateHordeTactics(run) {
   const { player: p, world } = run;
+  if (world.arena) {
+    for (const e of run.enemies) {
+      if (e.dead) continue;
+      e.dormant = false;
+      e.alerted = true;
+      e.tactic = { role: 'pursuit', x: p.x, z: p.z };
+    }
+    return;
+  }
   const labyrinth = world.labyrinth;
 
   for (const e of run.enemies) {

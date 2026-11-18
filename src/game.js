@@ -6,9 +6,9 @@ import { createPresentation, loadArt } from './presentation.js';
 import { clamp } from './world.js';
 import { createAudio } from './audio.js';
 import { createXR } from './xr.js';
-import { formatTime, initials, listScores, loadSettings, rapidSeed, recordRun, saveSettings } from './records.js';
+import { formatTime, initials, listScores, loadSettings, rapidSeed, recordRun, saveSettings, SCORE_BUCKETS } from './records.js';
 import { createGunHandling, gunAngle, heldPose, mountedAim, shotgunPumpTravel, toolLayouts } from './held-tools.js';
-import { DIFFICULTIES } from './difficulty.js';
+import { ARENA_SIZES, DIFFICULTIES, MODES } from './difficulty.js';
 import { drawFieldMapAndInventory } from './map-ui.js';
 
 const $ = id => document.getElementById(id);
@@ -127,7 +127,12 @@ function pointerLock() {
 
 function start(seed = rapidSeed()) {
   useMouseDrag = false;
-  run = createRun(seed, { difficulty: settings.difficulty, populate: true });
+  run = createRun(seed, {
+    mode: settings.mode,
+    difficulty: settings.difficulty,
+    arenaSize: settings.arenaSize,
+    populate: true,
+  });
   yaw = pitch = roomX = roomZ = 0;
   runId = rapidSeed();
   shotgunFiredAt = -Infinity;
@@ -143,7 +148,10 @@ function start(seed = rapidSeed()) {
   void audio.unlock();
   setPhase('playing');
   if (!xr.active) pointerLock();
-  setNotice(objective, 5.5);
+  const startMsg = run.mode === 'arena'
+    ? '6-sided arena shifts every 30s. Survive the doorway waves & grab upgrades between rounds!'
+    : objective;
+  setNotice(startMsg, 5.5);
   updateHUD(true);
 }
 
@@ -191,7 +199,8 @@ function showHome() {
 function resultScore() {
   const outcome = recordRun(run, runId, settings.initials);
   const rank = outcome.saved && outcome.place ? 'Local rank ' + outcome.place + ' · ' : '';
-  resultNote = DIFFICULTIES[run.difficulty].name + ' · ' + rank + 'Seed ' + run.seed;
+  const modeTag = run.mode === 'arena' ? `Wave ${run.wave?.number || 1} · ` : '';
+  resultNote = modeTag + run.rules.name + ' · ' + rank + 'Seed ' + run.seed;
   text('result-storage', resultNote);
 }
 
@@ -250,7 +259,7 @@ function showPanel(id) {
   $('shell').scrollTop = 0;
   if (id === 'help') $('help-title').focus({ preventScroll: true });
   if (id === 'scores') {
-    $('score-difficulty').value = settings.difficulty;
+    $('score-difficulty').value = settings.mode === 'arena' ? 'arena:' + settings.arenaSize : settings.difficulty;
     showScores();
   }
 }
@@ -281,22 +290,66 @@ function showScores() {
   target.append(table);
 }
 
+const modeOptions = Object.entries(MODES).map(([value, m]) => [value, m.name]);
+const modeSelect = $('mode');
+modeSelect.replaceChildren(...modeOptions.map(([value, label]) => new Option(label, value)));
+modeSelect.value = settings.mode;
+
 const difficultyOptions = Object.entries(DIFFICULTIES).map(([value, level]) => [value, level.name]);
 const diffSelect = $('difficulty');
 diffSelect.replaceChildren(...difficultyOptions.map(([value, label]) => new Option(label, value)));
 diffSelect.value = settings.difficulty;
+
+const arenaOptions = Object.entries(ARENA_SIZES).map(([value, level]) => [value, level.name]);
+const arenaSelect = $('arena-size');
+arenaSelect.replaceChildren(...arenaOptions.map(([value, label]) => new Option(label, value)));
+arenaSelect.value = settings.arenaSize;
+
+function syncMenuRows() {
+  const isArena = settings.mode === 'arena';
+  $('difficulty-row').hidden = isArena;
+  $('arena-size-row').hidden = !isArena;
+}
+syncMenuRows();
+
+modeSelect.addEventListener('change', () => {
+  settings.mode = modeOptions[modeSelect.selectedIndex][0];
+  syncMenuRows();
+  panelKey = '';
+  saveSettings(settings);
+});
 diffSelect.addEventListener('change', () => {
   settings.difficulty = difficultyOptions[diffSelect.selectedIndex][0];
   panelKey = '';
   saveSettings(settings);
 });
-$('score-difficulty').replaceChildren(...difficultyOptions.map(([value, label]) => new Option(label, value)));
+arenaSelect.addEventListener('change', () => {
+  settings.arenaSize = arenaOptions[arenaSelect.selectedIndex][0];
+  panelKey = '';
+  saveSettings(settings);
+});
+$('score-difficulty').replaceChildren(...SCORE_BUCKETS.map(([value, label]) => new Option(label, value)));
 $('score-difficulty').addEventListener('change', showScores);
 
+function cycleMode() {
+  const index = modeOptions.findIndex(([value]) => value === settings.mode);
+  settings.mode = modeOptions[(index + 1) % modeOptions.length][0];
+  modeSelect.value = settings.mode;
+  syncMenuRows();
+  panelKey = '';
+  saveSettings(settings);
+}
+
 function cycleDifficulty() {
-  const index = difficultyOptions.findIndex(([value]) => value === settings.difficulty);
-  settings.difficulty = difficultyOptions[(index + 1) % difficultyOptions.length][0];
-  diffSelect.value = settings.difficulty;
+  if (settings.mode === 'arena') {
+    const index = arenaOptions.findIndex(([value]) => value === settings.arenaSize);
+    settings.arenaSize = arenaOptions[(index + 1) % arenaOptions.length][0];
+    arenaSelect.value = settings.arenaSize;
+  } else {
+    const index = difficultyOptions.findIndex(([value]) => value === settings.difficulty);
+    settings.difficulty = difficultyOptions[(index + 1) % difficultyOptions.length][0];
+    diffSelect.value = settings.difficulty;
+  }
   panelKey = '';
   saveSettings(settings);
 }
@@ -552,6 +605,13 @@ function handleEvent(batch) {
       setNotice(event.quiet ? `Brushed ${event.kind}` : `Stepped in ${event.kind}!`, 1.1);
     } else if (event.type === 'wallBump') {
       xr.haptic('wallBump', settings);
+    } else if (event.type === 'earthShift') {
+      xr.haptic('earthShift', settings);
+      setNotice('Floor shifting!', 2.2);
+    } else if (event.type === 'waveClear') {
+      setNotice(`Wave ${event.wave} cleared! Gather upgrades & ammo.`, 4.5);
+    } else if (event.type === 'waveStart') {
+      setNotice(`Wave ${event.wave} incoming from the 6 doors!`, 2.8);
     } else if (event.type === 'shot') {
       if (event.weapon === 'shotgun') shotgunFiredAt = run.time;
       handling.kick(settings.leftHanded);
@@ -574,7 +634,9 @@ function updateHUD(force = false) {
   hudAt = run.time + 0.07;
   const p = run.player, display = Math.ceil(p.battery * 100);
   text('clock', formatTime(run.time));
-  text('hud-parts', DIFFICULTIES[run.difficulty].name.toUpperCase());
+  text('hud-parts', run.mode === 'arena'
+    ? `WAVE ${run.wave?.number || 1} · ${run.rules.name.toUpperCase()}`
+    : run.rules.name.toUpperCase());
   text('weapon-name', GUNS[p.weapon].name.toUpperCase());
   const rounds = count => String(count).padStart(2, '0');
   $('rounds').firstChild.textContent = rounds(p.ammo) + ' ';
@@ -623,26 +685,35 @@ function xrUI(sample, trackedView) {
     xr.drawAimPreview(null);
     return;
   }
-  const key = calibrating ? 'angle:' + settings.gunPitch + ':' + settings.gunYaw : phase + ':' + sample.tracked + ':' + settings.difficulty;
+  const key = calibrating
+    ? 'angle:' + settings.gunPitch + ':' + settings.gunYaw
+    : phase + ':' + sample.tracked + ':' + settings.mode + ':' + settings.difficulty + ':' + settings.arenaSize;
   if (panelKey !== key) {
     panelKey = key;
+    const isArena = settings.mode === 'arena';
+    const sizeLabel = isArena ? ARENA_SIZES[settings.arenaSize].name : DIFFICULTIES[settings.difficulty].name;
     const cards = {
       menu: {
         title: 'The Last Night',
-        lines: [
-          'Difficulty: ' + DIFFICULTIES[settings.difficulty].name + '   (X changes size & danger)',
+        lines: isArena ? [
+          `Mode: Fight in Tight Space (B switches)   ·   Size: ${sizeLabel} (X changes)`,
+          '6-door hexagonal room whose floor cubes shift every 30s — avoid getting cornered!',
+          'Start with a dimmer flashlight; survive doorway bursts to earn guns, ammo & upgrades.',
+          'Survive as many rounds as possible!',
+        ] : [
+          `Mode: Labyrinth Escape (B switches)   ·   ${sizeLabel} (X changes)`,
           'Fixed 30s flashlight + bright muzzle light to reveal fast ambushers.',
           'Headshots kill regulars (2-3 body). Brutes take 3 head / 6 body. Zombies ambush from behind!',
           'Manage scarce ammo and escape through the single perimeter EXIT.',
         ],
         hint: sample.tracked ? 'WEAPON TRIGGER  ·  START' : 'CONNECT BOTH CONTROLLERS',
-        second: 'A  ·  GUN ANGLE',
+        second: 'A  ·  GUN ANGLE      B  ·  MODE      X  ·  SIZE',
       },
       paused: {
         title: 'Paused',
         lines: [
           pauseReason,
-          `Kills: ${run.player.kills}   ·   Ammo: ${run.player.ammo}/${run.player.reserve}   ·   ${DIFFICULTIES[run.difficulty].name}`,
+          `Kills: ${run.player.kills}   ·   Ammo: ${run.player.ammo}/${run.player.reserve}   ·   ${run.mode === 'arena' ? `Wave ${run.wave?.number || 1} · ` : ''}${run.rules.name}`,
         ],
         hint: sample.weaponTracked ? 'TRIGGER  ·  RESUME' : 'CONNECT WEAPON CONTROLLER',
         second: 'B  ·  SURVIVAL KIT      A  ·  GUN ANGLE',
@@ -745,7 +816,8 @@ function frame(now, xrFrame) {
           else if (sample.anglePitch || sample.angleYaw) {
             updateGunSettings(settings.gunPitch + sample.anglePitch, settings.gunYaw + sample.angleYaw);
           }
-        } else if (phase === 'menu' && sample.menuDifficulty) cycleDifficulty();
+        } else if (phase === 'menu' && sample.menuMode) cycleMode();
+        else if (phase === 'menu' && sample.menuDifficulty) cycleDifficulty();
         else if (phase === 'paused' && sample.toggleMap) openMapView();
         else if (phase === 'paused' && sample.pause) resume();
         else if (sample.reload) { calibrating = true; panelKey = ''; }

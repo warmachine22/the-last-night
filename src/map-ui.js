@@ -19,7 +19,8 @@ export function drawFieldMapAndInventory(ctx, width, height, run, hint = '', sec
 
   ctx.fillStyle = '#8b9c89';
   ctx.font = '18px monospace';
-  ctx.fillText(`DIFFICULTY: ${snap.difficulty.toUpperCase()}    ·    TIME: ${clock}    ·    KILLS: ${snap.kills}`, 44, 102);
+  const tag = snap.mode === 'arena' ? `WAVE ${snap.wave} · ${snap.difficulty.toUpperCase()}` : snap.difficulty.toUpperCase();
+  ctx.fillText(`${tag}    ·    TIME: ${clock}    ·    KILLS: ${snap.kills}`, 44, 102);
 
   ctx.fillStyle = '#d8dfd0';
   ctx.font = 'bold 20px monospace';
@@ -41,8 +42,14 @@ export function drawFieldMapAndInventory(ctx, width, height, run, hint = '', sec
 
   ctx.fillStyle = '#9aa89b';
   ctx.font = '17px monospace';
-  ctx.fillText('Use your fixed 30s flashlight wisely. Avoid puddles, pebbles & dry branches.', 44, height - 108);
-  ctx.fillText('Find the single perimeter EXIT chamber while keeping spare rounds.', 44, height - 80);
+  if (snap.mode === 'arena') {
+    const lightLvl = snap.upgrades.find(u => u.key === 'light')?.level || 0;
+    ctx.fillText(`6-Sided Shifting Arena (shift every 30s) · Flashlight Level ${lightLvl}/5.`, 44, height - 108);
+    ctx.fillText('Survive doorway bursts and collect guns, ammo & upgrades between waves.', 44, height - 80);
+  } else {
+    ctx.fillText('Use your fixed 30s flashlight wisely. Avoid puddles, pebbles & dry branches.', 44, height - 108);
+    ctx.fillText('Find the single perimeter EXIT chamber while keeping spare rounds.', 44, height - 80);
+  }
 
   if (hint) {
     ctx.fillStyle = '#bdcca0';

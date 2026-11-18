@@ -22,6 +22,7 @@ export function questButtons(right, left, leftHanded) {
     toggleBeam: button(left, 4),
     pause: button(left, 5),
     menuDifficulty: button(left, 4),
+    menuMode: button(right, 5),
     toggleMap: button(right, 5),
   };
 }
@@ -250,7 +251,7 @@ export function createXR(renderer, scene, rig) {
     const strengths = {
       shotgun: [.79, 52], smg: [.37, 22], armor: [.89, 125],
       carbine: [.64, 40], pistol: [.51, 32], dry: [.18, 16],
-      wallBump: [.22, 18], hazardStep: [.30, 24], dotHit: [.42, 26],
+      wallBump: [.22, 18], hazardStep: [.30, 24], dotHit: [.42, 26], earthShift: [.38, 220],
     };
     const spec = strengths[kind];
     if (!spec) return;

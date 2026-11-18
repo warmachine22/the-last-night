@@ -1,4 +1,5 @@
 import { createLabyrinth, LABYRINTH_CELL, LABYRINTH_DOOR_HEIGHT, LABYRINTH_HEIGHT, LABYRINTH_JAMB } from './labyrinth.js';
+import { createArena } from './arena.js';
 
 export const CHUNK = 24;
 export const START = { x: 0, z: 0 };
@@ -62,6 +63,51 @@ function circleHitsBox(x, z, radius, bx, bz, rx, rz) {
 }
 
 export function createWorld(seed, opts = {}) {
+  if (opts.mode === 'arena') {
+    const arena = createArena(seed, { diameter: opts.diameter || 24, cellSize: opts.cellSize || 2.2 });
+    const move = (point, dx, dz, radius, allowDoorAlcove = false) => {
+      if (!arena.blocks(point.x + dx, point.z + dz, radius, allowDoorAlcove)) {
+        point.x += dx;
+        point.z += dz;
+        return { clipped: false };
+      }
+      let movedAny = false;
+      if (Math.abs(dx) > 1e-6 && !arena.blocks(point.x + dx, point.z, radius, allowDoorAlcove)) {
+        point.x += dx;
+        movedAny = true;
+      }
+      if (Math.abs(dz) > 1e-6 && !arena.blocks(point.x, point.z + dz, radius, allowDoorAlcove)) {
+        point.z += dz;
+        movedAny = true;
+      }
+      return { clipped: !movedAny || Math.abs(dx) > 1e-6 || Math.abs(dz) > 1e-6 };
+    };
+    const clear = (a, b, ground = false) => {
+      const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+      const len = Math.hypot(dx, dy, dz);
+      return len <= 0.14 || !arena.raycast(a, { x: dx / len, y: dy / len, z: dz / len }, len - 0.12, ground);
+    };
+    return {
+      seed,
+      mode: 'arena',
+      phase: 0,
+      arena,
+      labyrinth: null,
+      start: arena.start,
+      exit: null,
+      bounds: { min: -arena.circumradius, max: arena.circumradius },
+      sizeMeters: arena.diameter,
+      height: () => 0,
+      zoneAt: () => null,
+      chunk: () => ({ key: 'arena', hazards: [], loot: [] }),
+      around: () => [],
+      blocks: arena.blocks,
+      move,
+      raycast: arena.raycast,
+      clear,
+    };
+  }
+
   const mazeSize = opts.mazeSize || 78;
   const ammoScale = opts.ammoScale || 1.0;
   const labyrinth = createLabyrinth(seed, mazeSize, ammoScale);

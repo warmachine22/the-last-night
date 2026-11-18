@@ -15,14 +15,20 @@
   <main id="shell">
     <header class="masthead">
       <strong>THE LAST NIGHT</strong>
-      <span id="build">BUILD 2.2.1</span>
+      <span id="build">BUILD 2.3.0</span>
     </header>
     <section class="hero" aria-labelledby="title" id="home">
       <p class="eyebrow">BLACKWATER LABYRINTH · WEBXR</p>
       <h1 id="title">THE LAST<br><span>NIGHT</span></h1>
-      <p class="lede">Start in the center of a pitch-black high-ceiling labyrinth. Manage your fixed 30s flashlight &amp; scarce ammo through tight corridors and huge chambers to reach the single Exit.</p>
-      <label class="difficulty">Difficulty (Maze Size)
+      <p class="lede">Survive pitch-black horror across two modes: escape a sprawling Labyrinth or hold out inside a 6-sided shifting Fight in Tight Space Arena.</p>
+      <label class="difficulty">Game Mode
+        <select id="mode"></select>
+      </label>
+      <label class="difficulty" id="difficulty-row">Difficulty (Maze Size)
         <select id="difficulty"></select>
+      </label>
+      <label class="difficulty" id="arena-size-row" hidden>Arena Size
+        <select id="arena-size"></select>
       </label>
       <div class="actions">
         <button id="start" class="primary" disabled>Generating labyrinth…</button>
@@ -53,8 +59,8 @@
         <p>1–5 zombies hide silently in concealed corners—wait for you to pass a doorway or step inside, then ambush from behind and chase briefly out of their room before returning if you sprint far away. Headshots kill regulars instantly (2–3 body shots); Brutes take 3 headshots or 6 body shots.</p>
       </section>
       <section class="help-section">
-        <h3>Hazards, Ammo &amp; Escape</h3>
-        <p>Watch for pebbles, dry branches, and puddles on the floor—stepping in them alerts zombies in that room. Scavenge spare rounds, Shotguns, and Carbines while hunting for the single perimeter EXIT.</p>
+        <h3>Hazards, Ammo &amp; Modes</h3>
+        <p>In <strong>Labyrinth Escape</strong>, avoid floor hazards and find the single perimeter EXIT. In <strong>Fight in Tight Space</strong>, hold out wave-by-wave inside a 6-doorway hexagonal arena whose floor cubes shift every 30s while your weak starting flashlight and arsenal upgrade between waves.</p>
       </section>
       <button data-back>Back to menu</button>
     </section>

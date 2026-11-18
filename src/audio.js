@@ -164,6 +164,12 @@ export function createAudio() {
       * (.65 + .35 * Math.cos(2 * Math.PI * 24 * t)));
     procedural('wallBump', .16, (t, n, low) => (Math.sin(2 * Math.PI * 95 * t) * .55 + low * .45) * Math.exp(-t * 26) * Math.min(1, t * 180));
     procedural('dotPop', .14, (t, n, low) => (Math.sin(2 * Math.PI * (420 - 240 * t) * t) * .5 + n * .3) * Math.exp(-t * 24));
+    procedural('earthShift', 1.55, (t, n, low) => {
+      const env = Math.sin(Math.PI * Math.min(1, t / 1.55)) ** 0.7;
+      const rumble = Math.sin(2 * Math.PI * (38 + 9 * Math.sin(t * 7)) * t) * .55 + Math.sin(2 * Math.PI * 59 * t) * .28;
+      return (rumble * .62 + low * .48 + n * .12) * env * .75;
+    });
+    procedural('waveClear', .42, (t) => (Math.sin(2 * Math.PI * 330 * t) + .6 * Math.sin(2 * Math.PI * 495 * t)) * Math.exp(-t * 6.5) * .35);
   }
 
   function play(name, { bus = effects, gain = .4, speed = 1, loc } = {}) {
@@ -331,6 +337,10 @@ export function createAudio() {
         play(e.kind, { gain: e.quiet ? .25 : .64, loc: e, speed: .9 + Math.random() * .2 });
       } else if (e.type === 'wallBump') {
         play('wallBump', { gain: .28, speed: .92 + Math.random() * .18 });
+      } else if (e.type === 'earthShift') {
+        play('earthShift', { gain: .78, speed: .94 + Math.random() * .12 });
+      } else if (e.type === 'waveClear' || e.type === 'waveStart') {
+        play('waveClear', { gain: .35, speed: e.type === 'waveStart' ? .84 : 1.05 });
       } else if (e.type === 'dotHit') {
         play('dotPop', { gain: .48, loc: e });
       } else if (e.type === 'deflect') {

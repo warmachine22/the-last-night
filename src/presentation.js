@@ -4,6 +4,7 @@ import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import { CHUNK, clamp, distance, random } from './world.js';
 import { ENEMIES, GUNS, isSupply, LOOT, STEP } from './simulation.js';
 import { LABYRINTH_DOOR_HEIGHT, LABYRINTH_HEIGHT } from './labyrinth.js';
+import { ARENA_HEIGHT } from './arena.js';
 import { reloadMount } from './held-tools.js';
 import { burstPhase, interpolateEnemyTransform, legacyEnemyMotion, solvedEnemyPose } from './enemy-motion.js';
 import { beamTexture } from './night-lighting.js';
@@ -355,15 +356,87 @@ export function createPresentation(scene, art, layouts) {
   let lastChunkKey = '';
   let pendingChunks = false;
   let shadowDirty = true;
+  let arenaGroup = null;
+  let pillarMesh = null;
+  let lastArenaShiftVersion = -1;
   const lastLamp = { ox: 0, oy: 0, oz: 0, rx: 0, ry: 0, rz: 0, active: false, mode: '' };
+
+  function makeArenaView(arena) {
+    const group = new THREE.Group();
+    const shape = new THREE.Shape();
+    const hexR = arena.circumradius + 3.2;
+    for (let i = 0; i < 6; i++) {
+      const a = (i * Math.PI) / 3;
+      const x = Math.cos(a) * hexR;
+      const y = Math.sin(a) * hexR;
+      if (i === 0) shape.moveTo(x, y);
+      else shape.lineTo(x, y);
+    }
+    shape.closePath();
+
+    const floorGeo = new THREE.ShapeGeometry(shape);
+    const floor = new THREE.Mesh(floorGeo, surfaces.floor);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.02;
+    floor.receiveShadow = true;
+    floor.userData.disposeGeometry = true;
+    group.add(floor);
+
+    const ceilGeo = new THREE.ShapeGeometry(shape);
+    const ceil = new THREE.Mesh(ceilGeo, surfaces.ceiling);
+    ceil.rotation.x = Math.PI / 2;
+    ceil.position.y = ARENA_HEIGHT;
+    ceil.receiveShadow = false;
+    ceil.userData.disposeGeometry = true;
+    group.add(ceil);
+
+    const wallMesh = instance(group, baseBox, surfaces.wall, arena.wallSegments.length, true, true);
+    for (const [i, w] of arena.wallSegments.entries()) {
+      place(wallMesh, i, w.x, w.y, w.z, w.w, w.h, w.d, w.angleY, new THREE.Color(w.tint));
+    }
+    wallMesh?.computeBoundingSphere();
+
+    pillarMesh = instance(group, baseBox, surfaces.wall, arena.tiles.length, true, true);
+    if (pillarMesh) {
+      pillarMesh.frustumCulled = false;
+      for (let i = 0; i < arena.tiles.length; i++) {
+        pillarMesh.setColorAt(i, new THREE.Color(0x45494e));
+      }
+    }
+    scene.add(group);
+    return group;
+  }
+
+  function syncArenaPillars(arena, run, force = false) {
+    if (!pillarMesh) return;
+    const ver = run.arenaShift?.version ?? 0;
+    const moving = Boolean(run.arenaShift?.moving);
+    if (!force && !moving && ver === lastArenaShiftVersion) return;
+    lastArenaShiftVersion = ver;
+    const pad = arena.cellSize * 0.94;
+    for (let i = 0; i < arena.tiles.length; i++) {
+      const t = arena.tiles[i];
+      const h = t.height > 0.04 ? t.height : 0.04;
+      const y = t.height > 0.04 ? h / 2 : -0.005;
+      place(pillarMesh, i, t.x, y, t.z, pad, h, pad, 0);
+    }
+    pillarMesh.instanceMatrix.needsUpdate = true;
+    shadowDirty = true;
+  }
 
   function reset(run) {
     currentRun = run;
     lastChunkKey = '';
     pendingChunks = true;
     shadowDirty = true;
+    lastArenaShiftVersion = -1;
     for (const group of chunks.values()) discardChunk(group);
     chunks.clear();
+    if (arenaGroup) {
+      discardChunk(arenaGroup);
+      arenaGroup = null;
+      pillarMesh = null;
+    }
     for (const visual of enemyMeshes.values()) releaseEnemy(visual);
     enemyMeshes.clear();
     for (const view of pickups.values()) discardLoot(view);
@@ -371,8 +444,14 @@ export function createPresentation(scene, art, layouts) {
     for (const effect of effects.splice(0)) { effect.mesh.visible = false; impactPool.push(effect.mesh); }
     flashState.shot = null;
     const ex = run.world.exit;
-    exitLight.position.set(ex.doorX - ex.nx * 0.45, LABYRINTH_DOOR_HEIGHT + 0.15, ex.doorZ - ex.nz * 0.45);
+    if (ex) {
+      exitLight.position.set(ex.doorX - ex.nx * 0.45, LABYRINTH_DOOR_HEIGHT + 0.15, ex.doorZ - ex.nz * 0.45);
+    }
     exitLight.intensity = 0;
+    if (run.world.arena) {
+      arenaGroup = makeArenaView(run.world.arena);
+      syncArenaPillars(run.world.arena, run, true);
+    }
   }
 
   function discardChunk(group) {
@@ -657,7 +736,7 @@ export function createPresentation(scene, art, layouts) {
     light.target.position.set(ox + rx, oy + ry, oz + rz);
     light.angle = beam.angle;
     light.distance = beam.range;
-    light.intensity = (beam.mode === 'focus' ? 460 : 300) * power;
+    light.intensity = (beam.mode === 'focus' ? 460 : 300) * power * (beam.powerScale ?? 1);
     const moved = !lastLamp.active || lastLamp.mode !== beam.mode || shadowDirty
       || Math.abs(ox - lastLamp.ox) + Math.abs(oy - lastLamp.oy) + Math.abs(oz - lastLamp.oz) > 0.015
       || Math.abs(rx - lastLamp.rx) + Math.abs(ry - lastLamp.ry) + Math.abs(rz - lastLamp.rz) > 0.008;
@@ -721,7 +800,8 @@ export function createPresentation(scene, art, layouts) {
     if (run !== currentRun) reset(run);
     const p = run.player;
     const frozen = run.status !== 'playing';
-    updateChunks(run.world, p);
+    if (run.world.arena) syncArenaPillars(run.world.arena, run);
+    else updateChunks(run.world, p);
     updateEnemies(run, dt, [aimHit?.e?.id], [aim].filter(Boolean), enemyAlpha, frozen);
     updateTools(run, dt, settings, tracking, active, inspecting, stereo, calibration, beam);
     updateLoot(run, beam, Math.max(flashState.bounce.intensity, flashState.muzzle.intensity * 0.05));
@@ -736,7 +816,7 @@ export function createPresentation(scene, art, layouts) {
     }
 
     const ex = run.world.exit;
-    exitLight.intensity = !menu && Math.hypot(p.x - ex.doorX, p.z - ex.doorZ) < 28 ? 2.1 : 0;
+    exitLight.intensity = !menu && ex && Math.hypot(p.x - ex.doorX, p.z - ex.doorZ) < 28 ? 2.1 : 0;
 
     const ambiance = menu ? 'menu' : settings.visibility ? 'bright' : 'dark';
     if (tone !== ambiance) {

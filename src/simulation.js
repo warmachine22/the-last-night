@@ -1,14 +1,15 @@
-import { DIFFICULTIES, difficultyKey } from './difficulty.js';
+import { ARENA_SIZES, arenaSizeKey, DIFFICULTIES, difficultyKey, modeKey } from './difficulty.js';
 import {
   animatedAnchors, attackContact, attackDirection, burstPhase, BURST_BRAKE, BURST_LOAD, BURST_RUN,
   enemyMotion, HIT_SEGMENTS, hitRadii, strideLength, updateEnemyFooting,
 } from './enemy-motion.js';
-import { populateWorldRoster, syncActiveRoster } from './horde.js';
+import { MAX_ACTIVE_ZOMBIES, populateWorldRoster, syncActiveRoster } from './horde.js';
+import { ARENA_SHIFT_INTERVAL } from './arena.js';
 import { findMazeStep, MAX_PURSUIT_PLAYER_DIST, MAX_TETHER_FROM_HOME, updateHordeTactics } from './tactics.js';
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '2.2.1';
+export const BUILD = '2.3.0';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [12, 16, 20, 24], reload: 1.45, interval: 0.28, range: 48, damage: 1, noise: 22, rounds: 1, spread: 0 },
@@ -26,7 +27,8 @@ export const ENEMIES = {
   brute: { speed: 0.49, chaseSpeed: 1.20, height: 2.0, width: 0.36, hp: 6, windup: 0.82, reach: 1.35 },
 };
 
-// Flashlight is NOT upgradable — only firearm upgrades exist.
+// Flashlight is NOT upgradable in Labyrinth — only firearm upgrades exist there.
+// In Tight Space Arena mode, incremental Flashlight upgrades ('light') also spawn between waves.
 export const UPGRADES = {
   damage: { name: 'Hot loads', icon: '▲', cap: 3, color: '#ff8b70', description: '+15% impact stagger' },
   pierce: { name: 'Piercing rounds', icon: '»', cap: 2, color: '#ffb36c', description: '+1 target per shot' },
@@ -34,8 +36,13 @@ export const UPGRADES = {
   capacity: { name: 'Extended Capacity', icon: '▤', cap: 3, color: '#e2d18d', description: 'Larger firearm magazine' },
 };
 
-export const LOOT = {
+export const ARENA_UPGRADES = {
   ...UPGRADES,
+  light: { name: 'Flashlight Cell', icon: '☀', cap: 5, color: '#ffe5a3', description: '+flashlight range, power & runtime' },
+};
+
+export const LOOT = {
+  ...ARENA_UPGRADES,
   ammo: { name: 'Spare rounds', icon: '⋮', color: '#bac5b8' },
   pistol: { name: 'Service pistol', icon: 'pistol', color: '#f0cc91' },
   shotgun: { name: 'Pump shotgun', icon: 'shotgun', color: '#ffd299' },
@@ -46,7 +53,9 @@ export const LOOT = {
 
 const POINT = { x: 0, y: 0, z: -1 };
 const RESERVE_MAX = 120;
+const ARENA_RESERVE_MAX = 180;
 const FLASHLIGHT_RUNTIME = 30;
+const ARENA_FLASHLIGHT_RUNTIME = 15;
 const MUZZLE_LIGHT_DURATION = 0.22;
 const MUZZLE_LIGHT_RANGE = 20;
 const DRY_SPARK_RANGE = 3.5;
@@ -62,10 +71,15 @@ export function isSupply(kind) {
   return kind === 'ammo';
 }
 
-// Fixed non-upgradable flashlight beam settings
-export function beamSettings(mode = 'wide') {
+export function beamSettings(mode = 'wide', run = null) {
   const focus = mode === 'focus';
-  return { range: focus ? 22 : 15, angle: focus ? 0.25 : 0.49 };
+  if (run?.mode === 'arena') {
+    const lvl = run.player?.upgrades?.light || 0;
+    const range = (focus ? 10.5 : 7.5) + lvl * (focus ? 2.2 : 1.6);
+    const powerScale = clamp(0.34 + lvl * 0.13, 0.34, 1.0);
+    return { range, angle: focus ? 0.25 : 0.49, powerScale };
+  }
+  return { range: focus ? 22 : 15, angle: focus ? 0.25 : 0.49, powerScale: 1.0 };
 }
 
 export function activeBeams(run) {
@@ -86,7 +100,7 @@ export function resolvePlayerBeam(run, lamp, head) {
   const p = run.player, mode = p.beam;
   if (!mode || mode === 'off') return null;
   const cast = resolvedBeam(run.world, lamp, head);
-  return cast ? { ...cast, ...beamSettings(mode), mode } : null;
+  return cast ? { ...cast, ...beamSettings(mode, run), mode } : null;
 }
 
 export function inBeam(world, beam, at) {
@@ -196,16 +210,83 @@ function emit(run, type, data = {}) {
   run.events.push({ type, ...data });
 }
 
-export function createRun(seed = 'last-night', { populate = true, difficulty = 'standard' } = {}) {
-  const key = difficultyKey(difficulty);
-  const rules = DIFFICULTIES[key];
-  const world = createWorld(seed, { mazeSize: rules.mazeSize, ammoScale: rules.ammoScale });
-  const upgrades = Object.fromEntries(Object.keys(UPGRADES).map(k => [k, 0]));
+function buildWaveQueue(run, waveNum) {
+  const total = 5 + waveNum * 3;
+  const queue = [];
+  let remaining = total;
+  while (remaining > 0) {
+    // Bursts of 1..5 zombies entering through doorways
+    const maxBurst = waveNum === 1 ? 3 : 5;
+    const burst = Math.min(remaining, 1 + Math.floor(run.rng() * maxBurst));
+    const entries = [];
+    const baseDoor = Math.floor(run.rng() * 6);
+    for (let i = 0; i < burst; i++) {
+      const doorIdx = (baseDoor + Math.floor(run.rng() * 3)) % 6;
+      const roll = run.rng();
+      const bruteChance = waveNum >= 2 ? Math.min(0.28, 0.08 + waveNum * 0.03) : 0;
+      const shriekerChance = Math.min(0.38, 0.18 + waveNum * 0.03);
+      const kind = roll < bruteChance ? 'brute' : roll < bruteChance + shriekerChance ? 'shrieker' : 'shambler';
+      entries.push({ doorIdx, kind });
+    }
+    queue.push(entries);
+    remaining -= burst;
+  }
+  return { number: waveNum, total, spawned: 0, cleared: 0, queue, burstTimer: 0.4, intermission: 0 };
+}
+
+function spawnWaveRewards(run, clearedWave) {
+  const arena = run.world.arena;
+  const p = run.player;
+  const spots = arena.openFloorPoints(8);
+  let idx = 0;
+  const place = (kind, amount = 0) => {
+    const pt = spots[idx % spots.length] || { x: 0, z: 0 };
+    idx++;
+    const angle = (idx * 2.1);
+    const rx = spots.length ? pt.x : Math.cos(angle) * 2.5;
+    const rz = spots.length ? pt.z : Math.sin(angle) * 2.5;
+    setLoot(run, kind, rx, rz, `wave:${clearedWave}:${kind}:${idx}`, amount, LOOT[kind].name);
+  };
+
+  // Generous ammunition rewards
+  place('ammo', 10 + clearedWave * 2);
+  place('ammo', 8 + clearedWave * 2);
+
+  // Better guns across early waves
+  if (clearedWave === 1 && !Object.hasOwn(p.magazines, 'shotgun')) place('shotgun');
+  else if (clearedWave === 2 && !Object.hasOwn(p.magazines, 'smg')) place('smg');
+  else if (clearedWave >= 3 && !Object.hasOwn(p.magazines, 'carbine')) place('carbine');
+  else if (p.armor < 1) place('armor1');
+
+  if (p.armor < 1 && clearedWave % 2 === 0) place('armor1');
+
+  // Incremental flashlight & weapon upgrades between waves
+  if ((p.upgrades.light || 0) < ARENA_UPGRADES.light.cap) {
+    place('light');
+  }
+  const weaponUpgradePool = ['damage', 'capacity', 'reload', 'pierce'].filter(u => (p.upgrades[u] || 0) < UPGRADES[u].cap);
+  if (weaponUpgradePool.length) {
+    const pick = weaponUpgradePool[(clearedWave - 1 + Math.floor(run.rng() * weaponUpgradePool.length)) % weaponUpgradePool.length];
+    place(pick);
+  }
+}
+
+export function createRun(seed = 'last-night', { populate = true, difficulty = 'standard', mode = 'labyrinth', arenaSize = 'medium' } = {}) {
+  const runMode = modeKey(mode);
+  const key = runMode === 'arena' ? arenaSizeKey(arenaSize) : difficultyKey(difficulty);
+  const rules = runMode === 'arena' ? ARENA_SIZES[key] : DIFFICULTIES[key];
+  const world = runMode === 'arena'
+    ? createWorld(seed, { mode: 'arena', diameter: rules.diameter, cellSize: rules.cellSize })
+    : createWorld(seed, { mode: 'labyrinth', mazeSize: rules.mazeSize, ammoScale: rules.ammoScale });
+  const upgradeMap = runMode === 'arena' ? ARENA_UPGRADES : UPGRADES;
+  const upgrades = Object.fromEntries(Object.keys(upgradeMap).map(k => [k, 0]));
   const magazines = { pistol: GUNS.pistol.capacities[0] };
 
   const run = {
     seed,
+    mode: runMode,
     difficulty: key,
+    arenaSize: runMode === 'arena' ? key : null,
     rules,
     world,
     populate,
@@ -222,7 +303,7 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
       magazines,
       get ammo() { return this.magazines[this.weapon]; },
       set ammo(value) { this.magazines[this.weapon] = value; },
-      reserve: 20,
+      reserve: runMode === 'arena' ? 28 : 20,
       get equippedReserve() { return this.reserve; },
       set equippedReserve(value) { this.reserve = value; },
       armor: 0,
@@ -250,7 +331,9 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
     events: [],
     offer: null,
     beam: null,
-    counts: { total: 0, zones: world.labyrinth.zones.length },
+    wave: runMode === 'arena' ? { number: 1, total: 0, spawned: 0, cleared: 0, queue: [], burstTimer: 0, intermission: 0 } : null,
+    arenaShift: runMode === 'arena' ? { nextAt: ARENA_SHIFT_INTERVAL, version: 0, moving: false } : null,
+    counts: { total: 0, zones: world.labyrinth ? world.labyrinth.zones.length : 6 },
     nextId: 1,
     nextAttack: 0,
     nextTacticsTick: 0,
@@ -259,8 +342,12 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
     metrics: { shots: 0, dryFire: 0, wallBreaks: 0, roundsPicked: 0, upgrades: 0, hazardsTriggered: 0, pickups: {}, damage: {} },
   };
 
-  syncLoot(run);
-  if (populate) populateWorldRoster(run, addEnemy);
+  if (runMode === 'arena') {
+    if (populate) run.wave = buildWaveQueue(run, 1);
+  } else {
+    syncLoot(run);
+    if (populate) populateWorldRoster(run, addEnemy);
+  }
   return run;
 }
 
@@ -321,7 +408,7 @@ export function addEnemy(run, kind, x, z, meta = {}) {
   };
   enemy.previousTransform.yaw = enemy.yaw;
   if (!run.roster.includes(enemy)) run.roster.push(enemy);
-  if (!run.enemies.includes(enemy) && distance(enemy, run.player) <= 24) run.enemies.push(enemy);
+  if (!run.enemies.includes(enemy) && (run.mode === 'arena' || distance(enemy, run.player) <= 24)) run.enemies.push(enemy);
   return enemy;
 }
 
@@ -335,11 +422,13 @@ export function setLoot(run, kind, x, z, id = 'drop:' + run.nextId++, amount = 0
 
 function syncLoot(run) {
   const { player: p, world } = run;
-  const known = new Set(run.loot.map(item => item.id));
-  for (const area of world.around(p.x, p.z, 54)) {
-    for (const site of area.loot) {
-      if (known.has(site.id) || run.settledLoot.has(site.id)) continue;
-      setLoot(run, site.kind, site.x, site.z, site.id, site.amount || 0, site.name || '');
+  if (!world.arena) {
+    const known = new Set(run.loot.map(item => item.id));
+    for (const area of world.around(p.x, p.z, 54)) {
+      for (const site of area.loot) {
+        if (known.has(site.id) || run.settledLoot.has(site.id)) continue;
+        setLoot(run, site.kind, site.x, site.z, site.id, site.amount || 0, site.name || '');
+      }
     }
   }
   run.loot = run.loot.filter(item => !item.lost);
@@ -514,26 +603,35 @@ function takeLoot(run, confirm) {
     }
 
     if (k === 'ammo') {
-      const got = Math.max(0, Math.min(RESERVE_MAX - p.reserve, l.amount || 6));
+      const cap = run.mode === 'arena' ? ARENA_RESERVE_MAX : RESERVE_MAX;
+      const got = Math.max(0, Math.min(cap - p.reserve, l.amount || 6));
       if (!got) continue;
       p.reserve += got;
       run.metrics.roundsPicked += got;
       take(run, l, '+' + got + ' rounds');
-    } else if (k in UPGRADES && p.upgrades[k] < UPGRADES[k].cap) {
-      p.upgrades[k]++;
-      run.metrics.upgrades++;
-      const effect = k === 'capacity'
-        ? magazineCapacity(p) + (p.weapon === 'shotgun' ? ' shells' : ' rounds')
-        : UPGRADES[k].description;
-      take(run, l, UPGRADES[k].name + ' · ' + effect);
+    } else {
+      const upgradeTable = run.mode === 'arena' ? ARENA_UPGRADES : UPGRADES;
+      if (k in upgradeTable && p.upgrades[k] < upgradeTable[k].cap) {
+        p.upgrades[k]++;
+        run.metrics.upgrades++;
+        const effect = k === 'capacity'
+          ? magazineCapacity(p) + (p.weapon === 'shotgun' ? ' shells' : ' rounds')
+          : upgradeTable[k].description;
+        take(run, l, upgradeTable[k].name + ' · ' + effect);
+      }
     }
   }
 
   const item = run.offer;
   if (!confirm || !item) return;
   if (item.kind in GUNS) {
-    p.magazines[item.kind] = Math.min(GUNS[item.kind].capacities[p.upgrades.capacity], Math.max(4, p.reserve));
-    p.reserve = Math.max(0, p.reserve - p.magazines[item.kind]);
+    const cap = GUNS[item.kind].capacities[p.upgrades.capacity];
+    if (run.mode === 'arena') {
+      p.magazines[item.kind] = cap;
+    } else {
+      p.magazines[item.kind] = Math.min(cap, Math.max(4, p.reserve));
+      p.reserve = Math.max(0, p.reserve - p.magazines[item.kind]);
+    }
     equipWeapon(p, item.kind);
   } else {
     p.armor = Number(item.kind.at(-1));
@@ -570,6 +668,15 @@ function perception(run, e, gap, lamps) {
   const get = (x, z, score, reason, id, chase) => ({ x, z, score, reason, id, chase });
   let best = null;
   const offer = candidate => { if (!best || candidate.score > best.score) best = candidate; };
+
+  if (world.arena) {
+    e.dormant = false;
+    e.alerted = true;
+    e.returning = null;
+    e.target = get(p.x, p.z, 2.5, 'arena', 'player', true);
+    e.reason = 'arena';
+    return;
+  }
 
   const home = e.home || { x: e.x, z: e.z };
   const overTether = distance(e, home) > MAX_TETHER_FROM_HOME || distance(p, home) > MAX_PURSUIT_PLAYER_DIST + 1.5;
@@ -773,9 +880,10 @@ function attack(run, enemy, gap, dt) {
 function navigate(run, e, tx, tz, dt) {
   const cfg = ENEMIES[e.kind], { time, world } = run;
   const labyrinth = world.labyrinth;
+  const arena = world.arena;
 
   // Concealed zombies wait silently & motionless in their corner until ambush/alert triggers
-  if (e.tactic?.role === 'ambushIdle' && !e.target?.chase) {
+  if (!arena && e.tactic?.role === 'ambushIdle' && !e.target?.chase) {
     const face = Math.atan2((e.tactic.lookX ?? tx) - e.x, (e.tactic.lookZ ?? tz) - e.z);
     e.yaw += clamp(angleDelta(face, e.yaw), -dt * 3, dt * 3);
     e.moveSpeed = 0;
@@ -783,15 +891,26 @@ function navigate(run, e, tx, tz, dt) {
     return;
   }
 
-  // Multi-room grid navigation (cached 0.32 s) so ambushing zombies can cross doorways briefly and return home
-  const [tc, tr] = labyrinth.worldToCell(tx, tz);
-  const navKey = `${tc}:${tr}:${e.tactic?.role || ''}`;
   let stepTarget;
-  if (e._mazeNav && e._mazeNav.key === navKey && time < e._mazeNav.until && distance(e, e._mazeNav.target) > 0.4) {
-    stepTarget = e._mazeNav.target;
+  if (arena) {
+    const shiftVer = run.arenaShift?.version || 0;
+    const navKey = `a:${Math.round(tx)}:${Math.round(tz)}:${shiftVer}`;
+    if (e._mazeNav && e._mazeNav.key === navKey && time < e._mazeNav.until && distance(e, e._mazeNav.target) > 0.35) {
+      stepTarget = e._mazeNav.target;
+    } else {
+      stepTarget = arena.findStep(e, { x: tx, z: tz });
+      e._mazeNav = { key: navKey, target: stepTarget, until: time + 0.30 };
+    }
   } else {
-    stepTarget = findMazeStep(labyrinth, e, { x: tx, z: tz });
-    e._mazeNav = { key: navKey, target: stepTarget, until: time + 0.32 };
+    // Multi-room grid navigation (cached 0.32 s) so ambushing zombies can cross doorways briefly and return home
+    const [tc, tr] = labyrinth.worldToCell(tx, tz);
+    const navKey = `${tc}:${tr}:${e.tactic?.role || ''}`;
+    if (e._mazeNav && e._mazeNav.key === navKey && time < e._mazeNav.until && distance(e, e._mazeNav.target) > 0.4) {
+      stepTarget = e._mazeNav.target;
+    } else {
+      stepTarget = findMazeStep(labyrinth, e, { x: tx, z: tz });
+      e._mazeNav = { key: navKey, target: stepTarget, until: time + 0.32 };
+    }
   }
 
   const desired = Math.atan2(stepTarget.x - e.x, e.z - stepTarget.z);
@@ -825,11 +944,12 @@ function navigate(run, e, tx, tz, dt) {
   if (previous < 0.13 && speed >= 0.13) e.startAge = 0;
 
   const oldX = e.x, oldZ = e.z, radius = cfg.width * 0.83;
+  const allowAlcove = Boolean(arena);
   for (const turn of [0, 0.59, -0.59, 1.15, -1.15, 1.72, -1.72, 2.22]) {
     const vector = direction(e.yaw + turn * e.turnSide);
     const probe = Math.max(0.64, speed * 0.44);
-    if (world.blocks(e.x + vector.x * probe, e.z + vector.z * probe, radius + 0.06)) continue;
-    world.move(e, vector.x * dt * speed, vector.z * dt * speed, radius);
+    if (world.blocks(e.x + vector.x * probe, e.z + vector.z * probe, radius + 0.06, allowAlcove)) continue;
+    world.move(e, vector.x * dt * speed, vector.z * dt * speed, radius, allowAlcove);
     if (turn) e.yaw += clamp(turn * e.turnSide, -dt * look, dt * look);
     if (distance(e, { x: oldX, z: oldZ }) > 0.001) break;
   }
@@ -929,6 +1049,71 @@ function checkHazards(run, moved, dt, walkHeld) {
   }
 }
 
+function stepArenaState(run, dt) {
+  const { world, player: p, wave, arenaShift } = run;
+  const arena = world.arena;
+  if (!arena) return;
+
+  // 1) 30-second shifting floor cubes (never trapping player or any zombie)
+  if (run.time >= arenaShift.nextAt) {
+    const occupants = [{ x: p.x, z: p.z, radius: 0.65 }];
+    for (const e of run.enemies) {
+      if (!e.dead) occupants.push({ x: e.x, z: e.z, radius: 0.55 });
+    }
+    arena.shiftLayout(occupants, false);
+    arenaShift.version++;
+    arenaShift.nextAt = run.time + ARENA_SHIFT_INTERVAL;
+    emit(run, 'earthShift', { x: p.x, y: p.y, z: p.z, version: arenaShift.version });
+  }
+  arenaShift.moving = arena.stepAnimation(dt);
+
+  if (!run.populate || !wave) return;
+
+  // 2) Inter-wave breather countdown
+  if (wave.intermission > 0) {
+    wave.intermission = Math.max(0, wave.intermission - dt);
+    if (wave.intermission === 0) {
+      run.wave = buildWaveQueue(run, wave.number + 1);
+      emit(run, 'waveStart', { wave: run.wave.number });
+    }
+    return;
+  }
+
+  // 3) Burst doorway spawns (1..5 zombies per burst across the 6 doors)
+  const aliveCount = run.roster.reduce((sum, e) => sum + (e.dead ? 0 : 1), 0);
+  if (wave.queue.length > 0) {
+    wave.burstTimer -= dt;
+    if (wave.burstTimer <= 0 && aliveCount < MAX_ACTIVE_ZOMBIES) {
+      const burst = wave.queue[0];
+      const allowed = Math.min(burst.length, MAX_ACTIVE_ZOMBIES - aliveCount);
+      const batch = burst.splice(0, allowed);
+      if (burst.length === 0) wave.queue.shift();
+      for (const spec of batch) {
+        const face = arena.faces[spec.doorIdx % 6];
+        const side = (run.rng() - 0.5) * 0.9;
+        const back = 0.25 + run.rng() * 0.85;
+        const sx = face.spawnX + face.tx * side + face.nx * back;
+        const sz = face.spawnZ + face.tz * side + face.nz * back;
+        const zombie = addEnemy(run, spec.kind, sx, sz, { yaw: face.yaw, dormant: false });
+        zombie.alerted = true;
+        wave.spawned++;
+      }
+      wave.burstTimer = Math.max(2.1, 4.4 - wave.number * 0.24) + run.rng() * 1.4;
+      emit(run, 'doorBurst', { count: batch.length, wave: wave.number });
+    }
+    return;
+  }
+
+  // 4) Wave cleared -> spawn rewards & intermission
+  if (aliveCount === 0) {
+    run.roster = [];
+    run.enemies = [];
+    spawnWaveRewards(run, wave.number);
+    wave.intermission = 7.5;
+    emit(run, 'waveClear', { wave: wave.number, nextWave: wave.number + 1 });
+  }
+}
+
 export function stepRun(run, input = {}, dt = STEP) {
   run.events = [];
   if (run.status !== 'playing') return [];
@@ -955,10 +1140,13 @@ export function stepRun(run, input = {}, dt = STEP) {
   if (input.cycleWeapon) cycleWeapon(run);
   inspectFlashlights(run, input);
 
-  // Fixed non-upgradable 30s flashlight battery
+  // Labyrinth: fixed non-upgradable 30s flashlight. Tight Space Arena: dim 15s base scaling up with upgrades.
+  const runtime = run.mode === 'arena'
+    ? ARENA_FLASHLIGHT_RUNTIME + (p.upgrades.light || 0) * 3.5
+    : FLASHLIGHT_RUNTIME;
   const activeLight = p.flashlight && p.beam !== 'off' && !input.lampUnavailable;
   if (activeLight) {
-    p.battery = Math.max(0, p.battery - dt / FLASHLIGHT_RUNTIME);
+    p.battery = Math.max(0, p.battery - dt / runtime);
     if (p.battery === 0) {
       p.flashlight = false;
       emit(run, 'light', { on: false, empty: true });
@@ -966,6 +1154,8 @@ export function stepRun(run, input = {}, dt = STEP) {
   } else {
     p.battery = Math.min(1, p.battery + dt / 5);
   }
+
+  if (world.arena) stepArenaState(run, dt);
 
   const moveX = input.moveX || 0, moveZ = input.moveZ || 0;
   const length = Math.hypot(moveX, moveZ);
@@ -1009,7 +1199,7 @@ export function stepRun(run, input = {}, dt = STEP) {
   takeLoot(run, input.interact);
 
   const exit = world.exit;
-  if (distance(p, { x: exit.doorX, z: exit.doorZ }) < 1.45 || (distance(p, exit) < 1.0 && world.zoneAt(p.x, p.z)?.id === exit.zoneId && distance(p, { x: exit.doorX, z: exit.doorZ }) < 1.85)) {
+  if (exit && (distance(p, { x: exit.doorX, z: exit.doorZ }) < 1.45 || (distance(p, exit) < 1.0 && world.zoneAt(p.x, p.z)?.id === exit.zoneId && distance(p, { x: exit.doorX, z: exit.doorZ }) < 1.85))) {
     run.status = 'escaped';
     emit(run, 'extraction', { ...exit });
   }
@@ -1023,7 +1213,10 @@ export function stepRun(run, input = {}, dt = STEP) {
 
 export function inventorySnapshot(run) {
   const p = run.player;
+  const upgradeMap = run.mode === 'arena' ? ARENA_UPGRADES : UPGRADES;
   return {
+    mode: run.mode,
+    wave: run.wave?.number || 0,
     weapons: Object.entries(p.magazines).map(([k, mag]) => ({
       key: k,
       name: GUNS[k].name,
@@ -1036,7 +1229,7 @@ export function inventorySnapshot(run) {
     kills: p.kills,
     time: run.time,
     difficulty: run.rules.name,
-    upgrades: Object.entries(UPGRADES).map(([k, u]) => ({
+    upgrades: Object.entries(upgradeMap).map(([k, u]) => ({
       key: k,
       name: u.name,
       level: p.upgrades[k],

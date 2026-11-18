@@ -1,13 +1,13 @@
 import { BUILD } from './simulation.js';
 import { gunAngle } from './held-tools.js';
-import { DIFFICULTIES, difficultyKey } from './difficulty.js';
+import { ARENA_SIZES, arenaSizeKey, DIFFICULTIES, difficultyKey, modeKey } from './difficulty.js';
 
 const scoresKey = 'thelastnight.scores.v1';
 const settingsKey = 'thelastnight.settings.v1';
 const defaults = {
   leftHanded: false, seated: false, reducedFlashes: false, visibility: false,
   laserDot: false, volume: 0.75, initials: 'YOU', gunPitch: 0, gunYaw: 0,
-  difficulty: 'standard',
+  mode: 'labyrinth', difficulty: 'standard', arenaSize: 'medium',
 };
 let fallbackScores = [];
 
@@ -37,7 +37,9 @@ export function loadSettings() {
   settings.initials = initials(settings.initials);
   settings.gunPitch = gunAngle(settings.gunPitch);
   settings.gunYaw = gunAngle(settings.gunYaw);
+  settings.mode = modeKey(settings.mode);
   settings.difficulty = difficultyKey(settings.difficulty);
+  settings.arenaSize = arenaSizeKey(settings.arenaSize);
   return settings;
 }
 
@@ -54,17 +56,27 @@ export function rapidSeed() {
   return Array.from(crypto.getRandomValues(new Uint32Array(2)), n => n.toString(36)).join('-');
 }
 
+export const SCORE_BUCKETS = [
+  ...Object.entries(DIFFICULTIES).map(([k, v]) => [k, 'Labyrinth · ' + v.name]),
+  ...Object.entries(ARENA_SIZES).map(([k, v]) => ['arena:' + k, 'Tight Space · ' + v.name]),
+];
+
+const bucketKey = value => (String(value || '').startsWith('arena:')
+  ? 'arena:' + arenaSizeKey(String(value).slice(6))
+  : difficultyKey(value));
+
 function allScores() {
   const stored = read(scoresKey, []);
   const scores = new Map((Array.isArray(stored) ? stored : []).filter(row =>
     typeof row?.id === 'string' && Number.isFinite(row.time) && Number.isFinite(row.kills) &&
     typeof row.initials === 'string').map(row => [row.id, row]));
   for (const row of fallbackScores) scores.set(row.id, row);
-  return [...scores.values()].map(row => ({ ...row, difficulty: difficultyKey(row.difficulty) }));
+  return [...scores.values()].map(row => ({ ...row, difficulty: bucketKey(row.difficulty) }));
 }
 
-export function listScores(difficulty = 'standard') {
-  return allScores().filter(row => row.difficulty === difficultyKey(difficulty)).sort(compare).slice(0, 10);
+export function listScores(bucket = 'standard') {
+  const key = bucketKey(bucket);
+  return allScores().filter(row => row.difficulty === key).sort(compare).slice(0, 10);
 }
 
 function compare(a, b) {
@@ -75,14 +87,16 @@ function compare(a, b) {
 }
 
 export function recordRun(run, id, label) {
+  const bucket = run.mode === 'arena' ? 'arena:' + arenaSizeKey(run.arenaSize || run.difficulty) : difficultyKey(run.difficulty);
   const entry = {
     id, initials: initials(label), time: Math.floor(run.time * 100) / 100,
     kills: run.player.kills, headshots: run.player.headshots,
     parts: run.player.kills, escaped: run.status === 'escaped',
-    seed: run.seed, version: BUILD, difficulty: difficultyKey(run.difficulty),
+    seed: run.seed, version: BUILD, difficulty: bucket,
   };
   const scores = [...allScores().filter(row => row.id !== id), entry].sort(compare);
-  const records = Object.keys(DIFFICULTIES).flatMap(level => scores.filter(row => row.difficulty === level).slice(0, 10));
+  const validBuckets = SCORE_BUCKETS.map(([k]) => k);
+  const records = validBuckets.flatMap(level => scores.filter(row => row.difficulty === level).slice(0, 10));
   fallbackScores = records;
   const saved = write(scoresKey, records);
   return { saved, place: records.filter(row => row.difficulty === entry.difficulty).findIndex(row => row.id === id) + 1 };

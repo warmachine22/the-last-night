@@ -26,6 +26,10 @@ export function populateWorldRoster(run, createMonster) {
 
 // Stream and simulate only the closest active zombies around the player; distant zombies sleep cleanly in place.
 export function syncActiveRoster(run) {
+  if (run.mode === 'arena') {
+    run.enemies = run.roster.filter(e => !e.dead);
+    return;
+  }
   const p = run.player;
   const candidates = [];
   for (const e of run.roster) {
