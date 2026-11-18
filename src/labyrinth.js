@@ -467,8 +467,8 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
     const r2 = weaponRooms[Math.min(2, weaponRooms.length - 1)];
     lootSites.push({ id: 'loot:carbine', kind: 'carbine', x: r2.center.x, z: r2.center.z, amount: 0, name: 'Ranger carbine' });
   }
-  const upgradeKinds = ['damage', 'capacity', 'reload', 'pierce'];
-  const upgradeSlots = Math.min(weaponRooms.length, Math.max(4, Math.round(cols / 6)));
+  const upgradeKinds = ['light', 'damage', 'capacity', 'reload', 'pierce'];
+  const upgradeSlots = Math.min(weaponRooms.length, Math.max(5, Math.round(cols / 5)));
   for (let u = 0; u < upgradeSlots; u++) {
     const room = weaponRooms[Math.floor(((u + 1) * weaponRooms.length) / (upgradeSlots + 1))];
     if (!room) continue;

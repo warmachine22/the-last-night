@@ -62,6 +62,20 @@ function circleHitsBox(x, z, radius, bx, bz, rx, rz) {
   return dx * dx + dz * dz < radius * radius;
 }
 
+function makeClearWalk(blocksFn) {
+  return (a, b, radius = 0.25) => {
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist <= 0.16) return true;
+    const steps = Math.max(2, Math.ceil(dist / 0.40));
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      if (blocksFn(a.x + dx * t, a.z + dz * t, radius)) return false;
+    }
+    return true;
+  };
+}
+
 export function createWorld(seed, opts = {}) {
   if (opts.mode === 'arena') {
     const arena = createArena(seed, { diameter: opts.diameter || 24, cellSize: opts.cellSize || 2.2 });
@@ -105,6 +119,7 @@ export function createWorld(seed, opts = {}) {
       move,
       raycast: arena.raycast,
       clear,
+      clearWalk: makeClearWalk(arena.blocks),
     };
   }
 
@@ -340,5 +355,6 @@ export function createWorld(seed, opts = {}) {
     move,
     raycast,
     clear,
+    clearWalk: makeClearWalk(blocks),
   };
 }

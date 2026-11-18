@@ -277,6 +277,20 @@ function lootIcon(kind) {
     ctx.beginPath();
     ctx.arc(92, 52, 9, 0, Math.PI * 2);
     ctx.fill();
+  } else if (kind === 'light') {
+    // Flashlight optics upgrade: lens barrel + radiating light cone
+    ctx.fillStyle = '#5c7288';
+    ctx.fillRect(26, 56, 32, 16);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(58, 52); ctx.lineTo(68, 46); ctx.lineTo(68, 82); ctx.lineTo(58, 76);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(210, 240, 255, 0.52)';
+    ctx.beginPath();
+    ctx.moveTo(68, 50); ctx.lineTo(106, 30); ctx.lineTo(106, 98); ctx.lineTo(68, 78);
+    ctx.closePath();
+    ctx.fill();
   } else if (kind === 'damage') {
     ctx.fillStyle = color;
     ctx.beginPath();
@@ -520,11 +534,11 @@ export function createPresentation(scene, art, layouts) {
   };
 
   // Single-draw-call instanced blood droplets + floor splatters & lightweight crimson wound mist
-  const MAX_BLOOD = 96;
+  const MAX_BLOOD = 144;
   const bloodMesh = new THREE.InstancedMesh(
-    new THREE.DodecahedronGeometry(0.034, 0),
+    new THREE.DodecahedronGeometry(0.044, 0),
     new THREE.MeshStandardMaterial({
-      color: 0x6b0608, emissive: 0x2a0203, emissiveIntensity: 0.72, roughness: 0.24, metalness: 0.14,
+      color: 0x990b0f, emissive: 0x450405, emissiveIntensity: 0.95, roughness: 0.22, metalness: 0.14,
     }),
     MAX_BLOOD,
   );
@@ -533,13 +547,13 @@ export function createPresentation(scene, art, layouts) {
   bloodMesh.frustumCulled = false;
   scene.add(bloodMesh);
   const bloodDrops = [];
-  const mistPool = Array.from({ length: 10 }, () => {
+  const mistPool = Array.from({ length: 14 }, () => {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: glow, color: 0x840a0c, depthWrite: false, transparent: true, opacity: 0,
+      map: glow, color: 0x9c0f12, depthWrite: false, transparent: true, opacity: 0,
     }));
     s.visible = false;
     scene.add(s);
-    return { sprite: s, active: false, age: 0, life: 0.26, base: 0.2, growth: 0.4 };
+    return { sprite: s, active: false, age: 0, life: 0.30, base: 0.26, growth: 0.56 };
   });
 
   const flashTuning = {
@@ -928,24 +942,26 @@ export function createPresentation(scene, art, layouts) {
     const kill = Boolean(event.kill);
     const rx = event.rx || 0, ry = event.ry || 0, rz = event.rz || 0;
     const headBurst = head && kill;
-    const count = quality === 1 ? (headBurst ? 8 : 4) : headBurst ? 24 : kill ? 14 : 9;
+    const count = quality === 1 ? (headBurst ? 9 : 7) : headBurst ? 26 : kill ? 20 : 16;
     for (let i = 0; i < count; i++) {
-      const ooze = !headBurst && i >= Math.ceil(count * 0.62);
-      const speed = ooze ? 0.2 + Math.random() * 0.6 : (headBurst ? 3.2 : head ? 2.4 : 1.7) + Math.random() * 2.4;
-      const spread = ooze ? 0.55 : headBurst ? 1.45 : 0.95;
-      const vx = rx * speed * (ooze ? 0.2 : headBurst ? 0.55 : 0.75) + (Math.random() - 0.5) * speed * spread;
-      const vy = (ooze ? -0.25 + Math.random() * 0.45 : (headBurst ? 1.85 : head ? 1.15 : 0.55) + Math.random() * (headBurst ? 2.8 : 1.9));
-      const vz = rz * speed * (ooze ? 0.2 : headBurst ? 0.55 : 0.75) + (Math.random() - 0.5) * speed * spread;
-      const sc = (headBurst ? 1.45 : head ? 1.15 : 0.85) + Math.random() * 0.72;
+      const ooze = !headBurst && i >= Math.ceil(count * 0.65);
+      const sprayBack = !headBurst && i < Math.ceil(count * 0.28);
+      const dirSign = sprayBack ? -0.68 : 0.82;
+      const speed = ooze ? 0.25 + Math.random() * 0.65 : (headBurst ? 3.2 : 2.1) + Math.random() * 2.5;
+      const spread = ooze ? 0.60 : headBurst ? 1.45 : 1.15;
+      const vx = rx * speed * (ooze ? 0.2 : dirSign) + (Math.random() - 0.5) * speed * spread;
+      const vy = (ooze ? -0.25 + Math.random() * 0.45 : (headBurst ? 1.85 : 0.90) + Math.random() * (headBurst ? 2.8 : 2.1));
+      const vz = rz * speed * (ooze ? 0.2 : dirSign) + (Math.random() - 0.5) * speed * spread;
+      const sc = (headBurst ? 1.45 : 1.12) + Math.random() * 0.78;
       const drop = {
-        x: event.x + (Math.random() - 0.5) * 0.08,
-        y: event.y + (Math.random() - 0.5) * 0.08,
-        z: event.z + (Math.random() - 0.5) * 0.08,
+        x: event.x + (Math.random() - 0.5) * 0.09,
+        y: event.y + (Math.random() - 0.5) * 0.09,
+        z: event.z + (Math.random() - 0.5) * 0.09,
         vx, vy, vz,
         sc,
         ooze,
         splat: false,
-        age: ooze ? 0.75 + Math.random() * 0.4 : headBurst ? 1.45 + Math.random() * 0.55 : 1.1 + Math.random() * 0.5,
+        age: ooze ? 0.85 + Math.random() * 0.45 : headBurst ? 1.55 + Math.random() * 0.55 : 1.35 + Math.random() * 0.55,
       };
       if (bloodDrops.length >= MAX_BLOOD) bloodDrops.shift();
       bloodDrops.push(drop);
@@ -954,12 +970,12 @@ export function createPresentation(scene, art, layouts) {
     const mist = mistPool.find(m => !m.active) || mistPool[0];
     mist.active = true;
     mist.age = 0;
-    mist.life = headBurst ? 0.42 : head || kill ? 0.30 : 0.24;
-    mist.base = headBurst ? 0.36 : head ? 0.24 : 0.16;
-    mist.growth = headBurst ? 0.95 : head || kill ? 0.58 : 0.36;
+    mist.life = headBurst ? 0.44 : 0.34;
+    mist.base = headBurst ? 0.38 : 0.28;
+    mist.growth = headBurst ? 0.98 : 0.68;
     mist.sprite.position.set(event.x, event.y, event.z);
     mist.sprite.scale.setScalar(mist.base);
-    mist.sprite.material.opacity = headBurst ? 0.92 : head ? 0.78 : 0.62;
+    mist.sprite.material.opacity = headBurst ? 0.94 : 0.86;
     mist.sprite.visible = true;
   }
 
@@ -1057,11 +1073,12 @@ export function createPresentation(scene, art, layouts) {
     const ox = beam.origin.x, oy = beam.origin.y, oz = beam.origin.z;
     const rx = beam.ray.x, ry = beam.ray.y, rz = beam.ray.z;
     const focus = beam.mode === 'focus';
+    const scale = beam.powerScale ?? 1;
     light.position.set(ox, oy, oz);
     light.target.position.set(ox + rx, oy + ry, oz + rz);
     light.angle = beam.angle;
     light.distance = beam.range;
-    light.intensity = (focus ? 460 : 300) * power;
+    light.intensity = (focus ? 460 : 300) * power * scale;
     const moved = !lastLamp.active || lastLamp.mode !== beam.mode || shadowDirty
       || Math.abs(ox - lastLamp.ox) + Math.abs(oy - lastLamp.oy) + Math.abs(oz - lastLamp.oz) > 0.015
       || Math.abs(rx - lastLamp.rx) + Math.abs(ry - lastLamp.ry) + Math.abs(rz - lastLamp.rz) > 0.008;

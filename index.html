@@ -15,7 +15,7 @@
   <main id="shell">
     <header class="masthead">
       <strong>THE LAST NIGHT</strong>
-      <span id="build">BUILD 2.5.0</span>
+      <span id="build">BUILD 2.6.0</span>
     </header>
     <section class="hero" aria-labelledby="title" id="home">
       <p class="eyebrow">BLACKWATER LABYRINTH · WEBXR</p>
@@ -36,7 +36,7 @@
       </div>
       <p id="status" role="status" class="status">Preparing game assets…</p>
       <nav class="menu-links" aria-label="Game menu">
-        <button id="help-tab" data-panel="help">Field Guide</button>
+        <button id="help-tab" class="help-highlight" data-panel="help">Field Guide &amp; Wiki</button>
         <button data-panel="controls">Controls</button>
         <button data-panel="scores">Local scores</button>
         <button data-panel="settings">Settings</button>
@@ -46,22 +46,17 @@
     <section class="sheet help-sheet" id="help" hidden aria-labelledby="help-title">
       <div class="help-header">
         <div>
-          <h2 id="help-title" tabindex="-1">Field Guide</h2>
+          <h2 id="help-title" tabindex="-1">Field Guide &amp; Tactical Wiki</h2>
+          <nav aria-label="Guide sections">
+            <a href="#help-layouts">Layouts &amp; Sizes</a>
+            <a href="#help-combat">Damage &amp; AI</a>
+            <a href="#help-inventory">Pickups &amp; Upgrades</a>
+            <a href="#help-levels">Levels 1–20 &amp; Endless</a>
+          </nav>
         </div>
         <button data-back>Back to menu</button>
       </div>
-      <section class="help-section">
-        <h3>Flashlight, Flares &amp; Muzzle Fire</h3>
-        <p>Your flashlight never runs out of charge and defaults to a balanced wide beam (toggle Focus / Off with <code>Q</code> / <code>Left X</code>). Swap to the Flare Gun (<code>Tab</code> / <code>Right B</code>) to light up dark spaces cleanly—flares burn up to 3 at once without alerting zombies.</p>
-      </section>
-      <section class="help-section">
-        <h3>Ambush AI &amp; Combat</h3>
-        <p>1–5 zombies hide silently in concealed corners—wait for you to pass a doorway or step inside, then ambush from behind and chase briefly out of their room before returning if you sprint far away. Headshots kill regulars instantly (2–3 body shots); Brutes take 3 headshots or 6 body shots.</p>
-      </section>
-      <section class="help-section">
-        <h3>Hazards, Ammo &amp; Modes</h3>
-        <p>In <strong>Labyrinth Escape</strong>, avoid floor hazards and find the single perimeter EXIT. In <strong>Fight in Tight Space</strong>, hold out wave-by-wave inside a 6-doorway hexagonal arena whose floor cubes shift every 30s (never trapping any path) with weapons, ammo &amp; upgrades between rounds.</p>
-      </section>
+      <div id="help-body"></div>
       <button data-back>Back to menu</button>
     </section>
 

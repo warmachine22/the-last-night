@@ -451,13 +451,28 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
     return bestKind ? { t: bestT, kind: bestKind, normal: bestNormal, object: null } : null;
   }
 
-  function findStep(fromPos, toPos) {
+  function findStep(fromPos, toPos, radius = 0.25) {
     // Zombies inside an exterior doorway alcove first walk cleanly inward through their open door
     for (const f of faces) {
       if (fromPos.x * f.nx + fromPos.z * f.nz > apothem - 0.15) {
         return { x: f.entryX, z: f.entryZ };
       }
     }
+
+    const segmentClear = (a, b) => {
+      const dx = b.x - a.x, dz = b.z - a.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist <= 0.16) return true;
+      const steps = Math.max(2, Math.ceil(dist / 0.40));
+      for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        if (blocks(a.x + dx * t, a.z + dz * t, radius, false)) return false;
+      }
+      return true;
+    };
+
+    // Direct unobstructed Euclidean line — never snap to an invisible grid
+    if (segmentClear(fromPos, toPos)) return toPos;
 
     const startTile = nearestWalkableTile(fromPos.x, fromPos.z);
     const goalTile = nearestWalkableTile(toPos.x, toPos.z);
@@ -471,16 +486,20 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
     const queue = [[sc, sr]];
     const parent = new Map([[key(sc, sr), null]]);
     const maxNodes = rows * cols + 16;
+    const stepBlocked = (nc, nr) => {
+      const nb = tileGrid[nr]?.[nc];
+      return !nb || ((nb.solid || nb.targetHeight > 0) && key(nc, nr) !== goalKey);
+    };
 
     let found = false;
     for (let head = 0; head < queue.length && queue.length < maxNodes; head++) {
       const [c, r] = queue[head];
       if (key(c, r) === goalKey) { found = true; break; }
-      for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
         const nc = c + dc, nr = r + dr;
-        const nb = tileGrid[nr]?.[nc];
-        if (!nb) continue;
-        if ((nb.solid || nb.targetHeight > 0) && key(nc, nr) !== goalKey) continue;
+        if (stepBlocked(nc, nr)) continue;
+        // Diagonal movement only allowed if both orthogonal corners are clear
+        if (dc !== 0 && dr !== 0 && (stepBlocked(c + dc, r) || stepBlocked(c, r + dr))) continue;
         const nk = key(nc, nr);
         if (parent.has(nk)) continue;
         parent.set(nk, [c, r]);
@@ -489,14 +508,23 @@ export function createArena(seed, { diameter = 24, cellSize = 2.2 } = {}) {
     }
 
     if (!found) return toPos;
+    const path = [];
     let cur = [tc, tr];
-    while (true) {
+    while (cur) {
+      const t = tileGrid[cur[1]]?.[cur[0]];
+      if (t) path.push({ x: t.x, z: t.z });
       const prev = parent.get(key(cur[0], cur[1]));
       if (!prev || (prev[0] === sc && prev[1] === sr)) break;
       cur = prev;
     }
-    const nextTile = tileGrid[cur[1]]?.[cur[0]];
-    return nextTile ? { x: nextTile.x, z: nextTile.z } : toPos;
+    path.reverse();
+    path.push(toPos);
+
+    // String-pull: aim straight for the furthest waypoint along the path with clear corridor sight
+    for (let i = path.length - 1; i >= 0; i--) {
+      if (segmentClear(fromPos, path[i])) return path[i];
+    }
+    return path[0] || toPos;
   }
 
   // Initial cube formation right at run start with safe margin around player spawn (0, 0)

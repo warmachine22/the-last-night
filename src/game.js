@@ -10,6 +10,7 @@ import { formatTime, initials, listScores, loadSettings, rapidSeed, recordRun, s
 import { createGunHandling, gunAngle, heldPose, mountedAim, shotgunPumpTravel, toolLayouts } from './held-tools.js';
 import { ARENA_SIZES, DIFFICULTIES, MODES } from './difficulty.js';
 import { drawFieldMapAndInventory } from './map-ui.js';
+import { renderHelpGuide } from './help-guide.js';
 
 const $ = id => document.getElementById(id);
 const qs = new URLSearchParams(location.search);
@@ -257,7 +258,10 @@ function openResults() {
 function showPanel(id) {
   for (const panel of ['home', 'help', 'controls', 'scores', 'settings']) $(panel).hidden = panel !== id;
   $('shell').scrollTop = 0;
-  if (id === 'help') $('help-title').focus({ preventScroll: true });
+  if (id === 'help') {
+    renderHelpGuide($('help-body'));
+    $('help-title').focus({ preventScroll: true });
+  }
   if (id === 'scores') {
     $('score-difficulty').value = settings.mode === 'arena' ? 'arena:' + settings.arenaSize : settings.difficulty;
     showScores();

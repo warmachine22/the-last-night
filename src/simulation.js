@@ -9,7 +9,7 @@ import { findMazeStep, MAX_PURSUIT_PLAYER_DIST, MAX_TETHER_FROM_HOME, updateHord
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '2.5.0';
+export const BUILD = '2.6.0';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [12, 16, 20, 24], reload: 1.45, interval: 0.28, range: 48, damage: 1, noise: 22, rounds: 1, spread: 0 },
@@ -28,8 +28,9 @@ export const ENEMIES = {
   brute: { speed: 0.49, chaseSpeed: 1.20, height: 2.0, width: 0.36, hp: 6, windup: 0.82, reach: 1.35 },
 };
 
-// One standard infinite bright narrow-cone flashlight across both modes; firearm upgrades apply to guns.
+// Infinite flashlight starts at classic balanced cone; optics pickups extend range & intensity.
 export const UPGRADES = {
+  light: { name: 'Flashlight optics', icon: '☀', cap: 3, color: '#a8d5ff', description: '+22% beam reach & brighter lens' },
   damage: { name: 'Hot loads', icon: '▲', cap: 3, color: '#ff8b70', description: '+damage & impact stagger' },
   pierce: { name: 'Piercing rounds', icon: '»', cap: 2, color: '#ffb36c', description: '+1 target per shot' },
   reload: { name: 'Speed loader', icon: '↻', cap: 3, color: '#f1cd86', description: '15% faster reload' },
@@ -77,9 +78,42 @@ export function signalFlarePower(age) {
   return fade * fade * (3 - 2 * fade);
 }
 
-export function beamSettings(mode = 'wide') {
+export function beamSettings(mode = 'wide', run = null) {
   const focus = mode === 'focus';
-  return { range: focus ? 22 : 15, angle: focus ? 0.25 : 0.49, powerScale: 1 };
+  const level = run?.player?.upgrades?.light || 0;
+  return {
+    range: (focus ? 22 : 15) * (1 + level * 0.22),
+    angle: focus ? 0.25 : 0.49,
+    powerScale: 1 + level * 0.24,
+  };
+}
+
+export function waveProfile(waveNumber = 1) {
+  const w = Math.max(1, Math.floor(waveNumber));
+  const total = Math.min(48, 5 + w * 3);
+  const maxActive = MAX_ACTIVE_ZOMBIES;
+  const maxBurst = w === 1 ? 3 : w <= 4 ? 4 : 5;
+  const bruteChance = w >= 2 ? Math.min(0.32, 0.08 + w * 0.025) : 0;
+  const shriekerChance = Math.min(0.42, 0.18 + w * 0.022);
+  const speedScale = Number((1 + 0.32 * (1 - Math.exp(-(w - 1) * 0.065))).toFixed(2));
+  const shamblerHp = 3 + Math.floor(Math.max(0, w - 3) * 0.72);
+  const shriekerHp = 2 + Math.floor(Math.max(0, w - 3) * 0.55);
+  const bruteHp = 6 + Math.floor(Math.max(0, w - 2) * 1.15);
+  return {
+    wave: w,
+    total,
+    maxActive,
+    maxBurst,
+    bruteChance,
+    shriekerChance,
+    speedScale,
+    hp: { shambler: shamblerHp, shrieker: shriekerHp, brute: bruteHp },
+    shotsToKill: {
+      shambler: { head: Math.ceil(shamblerHp / 3), body: shamblerHp },
+      shrieker: { head: Math.ceil(shriekerHp / 3), body: shriekerHp },
+      brute: { head: Math.ceil(bruteHp / 2), body: bruteHp },
+    },
+  };
 }
 
 export function activeBeams(run) {
@@ -243,25 +277,22 @@ function pickSpawnDoor(run, usedDoors = []) {
 }
 
 function buildWaveQueue(run, waveNum) {
-  const total = 5 + waveNum * 3;
+  const prof = waveProfile(waveNum);
   const queue = [];
-  let remaining = total;
+  let remaining = prof.total;
   while (remaining > 0) {
     // Bursts of 1..5 zombies entering through doorways
-    const maxBurst = waveNum === 1 ? 3 : 5;
-    const burst = Math.min(remaining, 1 + Math.floor(run.rng() * maxBurst));
+    const burst = Math.min(remaining, 1 + Math.floor(run.rng() * prof.maxBurst));
     const entries = [];
     for (let i = 0; i < burst; i++) {
       const roll = run.rng();
-      const bruteChance = waveNum >= 2 ? Math.min(0.28, 0.08 + waveNum * 0.03) : 0;
-      const shriekerChance = Math.min(0.38, 0.18 + waveNum * 0.03);
-      const kind = roll < bruteChance ? 'brute' : roll < bruteChance + shriekerChance ? 'shrieker' : 'shambler';
+      const kind = roll < prof.bruteChance ? 'brute' : roll < prof.bruteChance + prof.shriekerChance ? 'shrieker' : 'shambler';
       entries.push({ kind });
     }
     queue.push(entries);
     remaining -= burst;
   }
-  return { number: waveNum, total, spawned: 0, cleared: 0, queue, burstTimer: 0.4, intermission: 0, lastFrontDoor: -1, frontDoorSpawns: 0 };
+  return { number: waveNum, total: prof.total, spawned: 0, cleared: 0, queue, burstTimer: 0.4, intermission: 0, lastFrontDoor: -1, frontDoorSpawns: 0 };
 }
 
 function spawnWaveRewards(run, clearedWave) {
@@ -292,12 +323,16 @@ function spawnWaveRewards(run, clearedWave) {
 
   if (p.armor < 1 && clearedWave % 2 === 0) place('armor1');
 
-  // Gun upgrades between every wave
-  const weaponUpgradePool = ['damage', 'capacity', 'reload', 'pierce'].filter(u => (p.upgrades[u] || 0) < UPGRADES[u].cap);
-  if (weaponUpgradePool.length) {
-    const first = weaponUpgradePool[(clearedWave - 1 + Math.floor(run.rng() * weaponUpgradePool.length)) % weaponUpgradePool.length];
+  // Guaranteed early flashlight optics + gun upgrades between every wave
+  const upgradePool = Object.keys(UPGRADES).filter(u => (p.upgrades[u] || 0) < UPGRADES[u].cap);
+  if (clearedWave === 1 && upgradePool.includes('light')) {
+    place('light');
+    const rest = upgradePool.filter(u => u !== 'light');
+    if (rest.length) place(rest[Math.floor(run.rng() * rest.length)]);
+  } else if (upgradePool.length) {
+    const first = upgradePool[(clearedWave - 1 + Math.floor(run.rng() * upgradePool.length)) % upgradePool.length];
     place(first);
-    const secondPool = weaponUpgradePool.filter(u => u !== first);
+    const secondPool = upgradePool.filter(u => u !== first);
     if (secondPool.length) {
       place(secondPool[Math.floor(run.rng() * secondPool.length)]);
     }
@@ -386,6 +421,8 @@ export function createRun(seed = 'last-night', { populate = true, difficulty = '
 }
 
 export function addEnemy(run, kind, x, z, meta = {}) {
+  const prof = run.mode === 'arena' ? waveProfile(meta.wave ?? run.wave?.number ?? 1) : null;
+  const hp = prof ? prof.hp[kind] : ENEMIES[kind].hp;
   const enemy = {
     id: run.nextId++,
     kind,
@@ -394,7 +431,10 @@ export function addEnemy(run, kind, x, z, meta = {}) {
     z,
     y: run.world.height(x, z),
     yaw: meta.yaw ?? run.rng() * Math.PI * 2,
-    hp: ENEMIES[kind].hp,
+    hp,
+    maxHp: hp,
+    waveSpeed: prof ? prof.speedScale : 1,
+    flankSide: (run.nextId % 2) ? 1 : -1,
     pace: 0.84 + run.rng() * 0.28,
     gait: run.rng() * Math.PI * 2,
     moveSpeed: 0,
@@ -654,10 +694,10 @@ export function shoot(run, aim) {
       noise(run, 'shriek', enemy, 12, 1.8, enemy.zoneId);
       enemyVoice(run, enemy, 'shriek');
 
-      // Regular zombies: headshot = instant kill, body = 2-3 hits.
-      // Brutes (6 HP): 3 headshots (2 dmg each) or 6 body shots (1 dmg each). Hot loads L2+ deals +1 dmg.
-      const bonus = Math.floor((p.upgrades.damage || 0) / 2);
-      const dmg = hit.head ? (enemy.kind === 'brute' ? 2 + bonus : enemy.hp) : 1 + bonus;
+      // Base: 3 headshot dmg (2 vs armored-skull Brute), 1 body dmg; scales infinitely against higher-wave HP
+      const bodyBonus = Math.floor((p.upgrades.damage || 0) / 2);
+      const headBonus = p.upgrades.damage || 0;
+      const dmg = hit.head ? (enemy.kind === 'brute' ? 2 : 3) + headBonus : 1 + bodyBonus;
       enemy.hp -= dmg;
       emit(run, 'impact', {
         ...hit.point,
@@ -865,8 +905,12 @@ function perception(run, e, gap, lamps) {
     e.memory = { ...best, until: time + rules.memorySeconds };
   }
 
-  if (!best && e.memory?.until > time && distance(e, e.memory) > 0.9 && !overTether) {
-    best = { ...e.memory, score: 0.2, reason: 'searching', chase: true };
+  if (!best && e.memory?.until > time && !overTether) {
+    if (distance(e, e.memory) > 0.9) {
+      best = { ...e.memory, score: 0.2, reason: 'searching', chase: true };
+    } else if (myZone?.doors?.length && distance(e, myZone.doors[0]) > 0.9) {
+      best = { x: myZone.doors[0].x, z: myZone.doors[0].z, score: 0.18, reason: 'searching', chase: true };
+    }
   }
 
   if ((!best && e.memory && e.memory.until <= time) || overTether) {
@@ -1000,29 +1044,34 @@ function navigate(run, e, tx, tz, dt) {
     return;
   }
 
+  const radius = cfg.width * 0.83;
+  const inArenaDoorway = Boolean(arena && arena.faces.some(f => e.x * f.nx + e.z * f.nz > arena.apothem - 1.25));
   let stepTarget;
   if (arena) {
     const shiftVer = run.arenaShift?.version || 0;
-    const navKey = `a:${Math.round(tx)}:${Math.round(tz)}:${shiftVer}`;
-    if (e._mazeNav && e._mazeNav.key === navKey && time < e._mazeNav.until && distance(e, e._mazeNav.target) > 0.35) {
+    const navKey = `a:${Math.round(tx * 2)}:${Math.round(tz * 2)}:${shiftVer}`;
+    if (!inArenaDoorway && world.clearWalk(e, { x: tx, z: tz }, radius)) {
+      stepTarget = { x: tx, z: tz };
+    } else if (e._mazeNav && e._mazeNav.key === navKey && time < e._mazeNav.until && distance(e, e._mazeNav.target) > 0.35) {
       stepTarget = e._mazeNav.target;
     } else {
-      stepTarget = arena.findStep(e, { x: tx, z: tz });
-      e._mazeNav = { key: navKey, target: stepTarget, until: time + 0.30 };
+      stepTarget = arena.findStep(e, { x: tx, z: tz }, radius);
+      e._mazeNav = { key: navKey, target: stepTarget, until: time + 0.24 };
     }
   } else {
-    // Multi-room grid navigation (cached 0.32 s) so ambushing zombies can cross doorways briefly and return home
+    // Smooth string-pulled maze navigation: walk straight when corridor is clear, BFS around corners
     const [tc, tr] = labyrinth.worldToCell(tx, tz);
-    const navKey = `${tc}:${tr}:${e.tactic?.role || ''}`;
-    if (e._mazeNav && e._mazeNav.key === navKey && time < e._mazeNav.until && distance(e, e._mazeNav.target) > 0.4) {
+    const navKey = `${tc}:${tr}:${e.tactic?.role || ''}:${Math.round(tx)}:${Math.round(tz)}`;
+    if (world.clearWalk(e, { x: tx, z: tz }, radius)) {
+      stepTarget = { x: tx, z: tz };
+    } else if (e._mazeNav && e._mazeNav.key === navKey && time < e._mazeNav.until && distance(e, e._mazeNav.target) > 0.4) {
       stepTarget = e._mazeNav.target;
     } else {
-      stepTarget = findMazeStep(labyrinth, e, { x: tx, z: tz });
-      e._mazeNav = { key: navKey, target: stepTarget, until: time + 0.32 };
+      stepTarget = findMazeStep(labyrinth, e, { x: tx, z: tz }, world.clearWalk, radius);
+      e._mazeNav = { key: navKey, target: stepTarget, until: time + 0.24 };
     }
   }
 
-  const inArenaDoorway = Boolean(arena && arena.faces.some(f => e.x * f.nx + e.z * f.nz > arena.apothem - 1.25));
   const desired = Math.atan2(stepTarget.x - e.x, e.z - stepTarget.z);
   let vx = Math.sin(desired), vz = -Math.cos(desired);
   const sepWeight = inArenaDoorway ? 0.20 : 1.15;
@@ -1046,15 +1095,17 @@ function navigate(run, e, tx, tz, dt) {
   const progress = e.stumble > 0 ? 1 - e.stumble / e.stumbleDuration : 0;
   const stumblePace = progress > 0 ? 1 - 0.43 * Math.sin(Math.PI * progress) + 0.16 * Math.sin(2 * Math.PI * progress) : 1;
 
-  const baseSpeed = e.target?.chase ? Math.min(run.rules.speedLimit, cfg.chaseSpeed * run.rules.aggroScale) : cfg.speed * 1.15;
-  const speedTarget = (isBurst ? run.rules.speedLimit : baseSpeed * e.pace * stepPace * stumblePace)
+  const waveMult = e.waveSpeed || 1;
+  const maxRunSpeed = run.rules.speedLimit * (waveMult > 1 ? Math.min(1.25, waveMult) : 1);
+  const baseSpeed = e.target?.chase ? Math.min(maxRunSpeed, cfg.chaseSpeed * run.rules.aggroScale * waveMult) : cfg.speed * 1.15;
+  const speedTarget = (isBurst ? maxRunSpeed : baseSpeed * e.pace * stepPace * stumblePace)
     * (e.slow > 0 ? 0.58 : 1) * (e.stun > 0 ? 0.45 : 1) * (e.recover > 0.32 ? 0.35 : 1);
   const previous = e.moveSpeed;
-  const targetSpeed = Math.min(run.rules.speedLimit, burst === 'BurstLoad' ? 0.22 : burst === 'Brake' ? speedTarget * 0.66 : speedTarget);
+  const targetSpeed = Math.min(maxRunSpeed, burst === 'BurstLoad' ? 0.22 : burst === 'Brake' ? speedTarget * 0.66 : speedTarget);
   const speed = e.moveSpeed += clamp(targetSpeed - e.moveSpeed, -dt * 5.6, dt * (e.kind === 'brute' ? 2.6 : 5.4));
   if (previous < 0.13 && speed >= 0.13) e.startAge = 0;
 
-  const oldX = e.x, oldZ = e.z, radius = cfg.width * 0.83;
+  const oldX = e.x, oldZ = e.z;
   const allowAlcove = Boolean(arena);
   const turnAngles = inArenaDoorway ? [0, 0.35, -0.35, 0.72, -0.72, 1.15, -1.15] : [0, 0.59, -0.59, 1.15, -1.15, 1.72, -1.72, 2.22];
   const baseProbe = inArenaDoorway ? Math.max(0.32, speed * 0.24) : Math.max(0.64, speed * 0.44);
@@ -1127,9 +1178,9 @@ function updateEnemies(run, dt, lamps) {
 
     if (attack(run, e, gap, dt)) continue;
 
-    const nav = e.target?.chase
-      ? { x: e.target.x, z: e.target.z }
-      : (e.tactic || e.home || { x: e.x, z: e.z });
+    const nav = e.tactic && (e.tactic.role === 'flank' || e.tactic.role === 'pursuit')
+      ? e.tactic
+      : (e.target?.chase ? { x: e.target.x, z: e.target.z } : (e.tactic || e.home || { x: e.x, z: e.z }));
     e.route = nav;
     navigate(run, e, nav.x, nav.z, dt);
     if (voiceAllowed.has(e.id)) voiceCadence(run, e, gap);

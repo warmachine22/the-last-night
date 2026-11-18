@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  addEnemy, beamSettings, BUILD, createRun, ENEMIES, enemyPose, FLARE_MAX_ACTIVE, GUNS, resolvePlayerBeam, setLoot, shoot, STEP, stepRun, UPGRADES,
+  addEnemy, beamSettings, BUILD, createRun, ENEMIES, enemyPose, FLARE_MAX_ACTIVE, GUNS, resolvePlayerBeam, setLoot, shoot, STEP, stepRun, UPGRADES, waveProfile,
 } from '../src/simulation.js';
 import { ARENA_SIZES, DIFFICULTIES } from '../src/difficulty.js';
 import { createLabyrinth, LABYRINTH_CELL, LABYRINTH_HEIGHT } from '../src/labyrinth.js';
@@ -17,7 +17,7 @@ function advance(run, seconds, input = {}) {
 }
 
 test('all three difficulty maze sizes (78m, 114m, 156m) have high ceilings, mix of tight and big spaces, and one exit', () => {
-  assert.equal(BUILD, '2.5.0');
+  assert.equal(BUILD, '2.6.0');
   assert.equal(CHUNK, 24);
   assert.equal(MAX_ACTIVE_ZOMBIES, 18);
   assert.ok(LABYRINTH_HEIGHT >= 4.0, `ceiling height should be tall (>=4.0m), got ${LABYRINTH_HEIGHT}`);
@@ -210,11 +210,11 @@ test('Fight in Tight Space mode builds a 6-sided 6-door arena with connected pat
       assert.equal(arena.allZonesConnected(blockedSet, pTile, reqTiles), true, `${sizeKey} shift ${s} partitioned arena!`);
     }
 
-    // Restored original infinite beam across modes (no flashlight upgrade)
+    // Restored original infinite beam baseline, upgradeable via Flashlight optics pickups
     const lampAim = { origin: { x: 0, y: 1.4, z: 0 }, ray: { x: 0, y: 0, z: -1 } };
     const arenaBeam = resolvePlayerBeam(arenaRun, lampAim, { x: 0, y: 1.63, z: 0 });
     assert.ok(arenaBeam.range === 15 && arenaBeam.angle === 0.49 && arenaBeam.powerScale === 1);
-    assert.equal('light' in UPGRADES, false);
+    assert.equal('light' in UPGRADES, true);
     assert.ok(arenaRun.player.reserve >= 50, 'arena should start with generous reserve ammo');
   }
 
@@ -294,13 +294,13 @@ test('Fight in Tight Space mode builds a 6-sided 6-door arena with connected pat
   assert.ok(raisedCount >= 2, `raised floor cubes should reach ceiling height, got ${raisedCount}`);
   assert.equal(run.world.blocks(run.player.x, run.player.z, 0.27), false, 'shifting floor must never trap the player');
 
-  // Clear remaining wave enemies and verify abundant ammo + shotgun + gun upgrades spawn (no flashlight upgrade)
+  // Clear remaining wave enemies and verify abundant ammo + shotgun + flashlight & gun upgrades spawn
   run.wave.queue = [];
   for (const e of run.roster) e.dead = true;
   run.enemies = [];
   const clearEv = advance(run, 0.2, {});
   assert.ok(clearEv.some(e => e.type === 'waveClear'));
-  assert.equal(run.loot.some(l => l.kind === 'light'), false, 'flashlight upgrade should not spawn');
+  assert.equal(run.loot.some(l => l.kind === 'light'), true, 'flashlight optics upgrade should spawn between early waves');
   assert.ok(run.loot.filter(l => l.kind === 'ammo').length >= 3, 'multiple generous ammo pickups should spawn between waves');
   assert.ok(run.loot.some(l => l.kind in UPGRADES), 'gun upgrades should spawn between waves');
   assert.ok(run.loot.some(l => l.kind === 'shotgun'));
@@ -351,4 +351,52 @@ test('original flashlight cone, headshot kill event, non-attracting 3-flare cap 
   const ev = stepRun(run, { fire: true, aim: { origin: o, ray: { x: dx / d, y: dy / d, z: dz / d } } }, STEP);
   assert.ok(ev.some(e => e.type === 'impact' && e.head && e.kill), 'headshot kill must emit impact with head & kill flags');
   assert.equal(run.corpses.at(-1)?.headshot, true, 'corpse record must mark headshot kill for head explosion');
+});
+
+test('flashlight upgrades scale gradually, smooth diagonal pathing avoids grid turns, 4+ zombies flank, and waves scale infinitely', () => {
+  // 1) Flashlight optics upgrade increases range & intensity step-by-step
+  const run = createRun('optics-and-ai', { mode: 'arena', arenaSize: 'spacious', populate: false });
+  const lamp = { origin: { x: 0, y: 1.4, z: 0 }, ray: { x: 0, y: 0, z: -1 } };
+  const baseBeam = resolvePlayerBeam(run, lamp, { x: 0, y: 1.63, z: 0 });
+  assert.equal(baseBeam.range, 15);
+  assert.equal(baseBeam.powerScale, 1);
+
+  setLoot(run, 'light', run.player.x, run.player.z, 'test:light-1');
+  advance(run, 0.08, {});
+  const lv1Beam = resolvePlayerBeam(run, lamp, { x: 0, y: 1.63, z: 0 });
+  assert.ok(lv1Beam.range > baseBeam.range && lv1Beam.powerScale > baseBeam.powerScale, 'flashlight optics must gradually improve beam range & power');
+
+  // 2) Smooth non-grid direct diagonal movement when line of sight is unobstructed
+  // Pick a clear open spot near center to verify zombie moves diagonally rather than pure axis-aligned grid steps
+  const diagZ = addEnemy(run, 'shambler', 2.2, 2.2, { dormant: false });
+  diagZ.yaw = Math.atan2(-2.2, 2.2);
+  advance(run, 0.45, {});
+  const dxMoved = 2.2 - diagZ.x, dzMoved = 2.2 - diagZ.z;
+  assert.ok(dxMoved > 0.15 && dzMoved > 0.15, `expected smooth diagonal motion toward (0,0), got dx=${dxMoved.toFixed(2)}, dz=${dzMoved.toFixed(2)}`);
+
+  // 3) When 4+ zombies chase in a line, trailing zombies split into flanking tactics instead of marching single-file
+  const flankers = [];
+  for (let i = 0; i < 5; i++) {
+    flankers.push(addEnemy(run, 'shrieker', 0, -4.0 - i * 1.1, { dormant: false }));
+  }
+  advance(run, 0.65, {});
+  const flankingCount = flankers.filter(z => z.tactic?.role === 'flank').length;
+  assert.ok(flankingCount >= 2, `at least 2 trailing zombies in a 5-zombie line should break off to flank (got ${flankingCount})`);
+
+  // 4) Infinite level difficulty scaling across levels 1..25 (room active cap stays 18 while headshot durability rises)
+  const w1 = waveProfile(1), w10 = waveProfile(10), w20 = waveProfile(20), w25 = waveProfile(25);
+  assert.equal(w1.maxActive, 18);
+  assert.equal(w25.maxActive, 18);
+  assert.equal(w1.shotsToKill.shambler.head, 1);
+  assert.ok(w10.shotsToKill.shambler.head >= 3, `Wave 10 Shambler should take >=3 base headshots (got ${w10.shotsToKill.shambler.head})`);
+  assert.ok(w20.shotsToKill.shambler.head > w10.shotsToKill.shambler.head && w25.hp.shambler > w20.hp.shambler, 'HP and headshot durability must scale infinitely past Wave 20');
+
+  // Verify live Wave 10 Shambler actually survives 1 base headshot and dies only after repeated headshots
+  const w10Run = createRun('wave-10-scaling', { mode: 'arena', arenaSize: 'medium', populate: false });
+  w10Run.wave.number = 10;
+  const toughShambler = addEnemy(w10Run, 'shambler', 0, -2.5, { dormant: false });
+  assert.equal(toughShambler.hp, w10.hp.shambler);
+  const o = { x: 0, y: enemyPose(toughShambler).head.y, z: 0 };
+  shoot(w10Run, { origin: o, ray: { x: 0, y: 0, z: -1 } });
+  assert.equal(toughShambler.dead, false, 'Wave 10 Shambler must survive a single un-upgraded headshot');
 });
