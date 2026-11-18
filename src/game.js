@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import {
-  BUILD, createRun, flarePower, GUNS, inspectFlashlights, isSupply, LOOT,
-  resolvePlayerBeam, signalFlarePower, STEP, stepRun, traceAim,
+  BUILD, createRun, GUNS, LOOT, STEP, stepRun, traceAim,
 } from './simulation.js';
 import { createPresentation, loadArt } from './presentation.js';
 import { clamp } from './world.js';
@@ -10,14 +9,12 @@ import { createXR } from './xr.js';
 import { formatTime, initials, listScores, loadSettings, rapidSeed, recordRun, saveSettings } from './records.js';
 import { createGunHandling, gunAngle, heldPose, mountedAim, shotgunPumpTravel, toolLayouts } from './held-tools.js';
 import { DIFFICULTIES } from './difficulty.js';
-import { PARTS_REQUIRED, RADIO_REPLY } from './extraction.js';
-import { setDressingEnabled } from './dressing.js';
 import { drawFieldMapAndInventory } from './map-ui.js';
 
 const $ = id => document.getElementById(id);
 const qs = new URLSearchParams(location.search);
 const showPerformance = qs.has('perf');
-if (qs.get('dressing') === 'off') setDressingEnabled(false);
+const ESCAPE_REPLY = 'Perimeter exit breached. You made it out of the labyrinth alive.';
 const touch = matchMedia('(pointer: coarse)').matches;
 const settings = loadSettings();
 const held = new Set(), queued = {};
@@ -50,7 +47,7 @@ const layouts = toolLayouts(art);
 const presentation = createPresentation(scene, art, layouts);
 const handling = createGunHandling();
 $('start').disabled = false;
-$('start').textContent = touch ? 'Start on this screen' : 'Enter the forest';
+$('start').textContent = touch ? 'Start on this screen' : 'Enter the Labyrinth';
 $('build').textContent = 'BUILD ' + BUILD;
 $('status').textContent = '';
 void xr.supported().then(ok => {
@@ -70,7 +67,7 @@ let aimHit = null, shotgunFiredAt = -Infinity, calibrating = false, mapMode = fa
 const direction0 = new THREE.Vector3(0, 0, -1);
 const vertical = new THREE.Vector3(0, 1, 0);
 const text = (id, value) => { $(id).textContent = value; };
-const objective = 'Search cabins for 6 radio parts. Shine your light to expose green weak spots.';
+const objective = 'Fire to light your path & expose green weak spots. Find the perimeter EXIT.';
 
 function clearInput() {
   held.clear();
@@ -206,33 +203,30 @@ function inspectDeath() {
   fillResults('The light went out.', deathMessage, false);
   $('result-initials').value = settings.initials;
   resultScore();
-  const p = run.player;
-  p.battery = 1;
-  p.flashlight = true;
   text('death-view-reason', deathMessage);
-  text('death-view-controls', touch ? 'Drag to look · Aim with light controls' : 'Drag to look · F / Q for light · Esc for results');
+  text('death-view-controls', touch ? 'Drag to look · Results for scoreboard' : 'Drag to look · Esc for results');
   lookAround();
   if (document.pointerLockElement === canvas) document.exitPointerLock();
 }
 
 function fillResults(title, description, escaped) {
   text('results-title', title);
-  text('result-eyebrow', escaped ? 'EXTRACTION' : 'AFTER THE ATTACK');
+  text('result-eyebrow', escaped ? 'ESCAPED THE LABYRINTH' : 'LOST IN THE DARK');
   text('death-reason', description);
   text('result-time-label', escaped ? 'ESCAPE TIME' : 'SURVIVED');
   text('result-time', formatTime(run.time));
   text('result-kills', run.player.kills);
-  text('result-parts', `${run.search.parts.length} / ${PARTS_REQUIRED}`);
+  text('result-parts', run.metrics.shots);
   $('look-around').hidden = escaped;
   $('result-initials').parentElement.hidden = false;
 }
 
 function inspectEscape() {
-  replyUntil = performance.now() + 3850;
+  replyUntil = performance.now() + 2600;
   deathAt = 0;
   resultScore();
-  text('radio-reply', RADIO_REPLY);
-  fillResults('Escaped', RADIO_REPLY, true);
+  text('radio-reply', ESCAPE_REPLY);
+  fillResults('Escaped', ESCAPE_REPLY, true);
   setPhase('extracting');
   if (document.pointerLockElement === canvas) document.exitPointerLock();
 }
@@ -270,14 +264,13 @@ function showScores() {
   const table = document.createElement('table');
   table.className = 'records';
   const headings = table.createTHead().insertRow();
-  for (const name of ['#', 'Player', 'Outcome', 'Time', 'Parts', 'Kills']) {
+  for (const name of ['#', 'Player', 'Outcome', 'Time', 'Kills']) {
     const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = name; headings.append(cell);
   }
   const body = table.createTBody();
   for (const [i, row] of items.entries()) {
     const tr = body.insertRow();
-    const partsLabel = `${row.parts ?? 0}/${PARTS_REQUIRED}`;
-    for (const part of [i + 1, row.initials, row.escaped ? 'Escaped' : 'Fallen', formatTime(row.time), partsLabel, row.kills]) {
+    for (const part of [i + 1, row.initials, row.escaped ? 'Escaped' : 'Fallen', formatTime(row.time), row.kills]) {
       tr.insertCell().textContent = part;
     }
   }
@@ -382,7 +375,7 @@ renderer.xr.addEventListener('sessionend', () => {
   showHome();
 });
 
-const keyboard = { KeyR: 'reload', Tab: 'cycleWeapon', KeyF: 'toggleLight', KeyQ: 'toggleBeam', KeyE: 'interact', Space: 'fire' };
+const keyboard = { KeyR: 'reload', Tab: 'cycleWeapon', KeyE: 'interact', Space: 'fire' };
 document.addEventListener('keydown', event => {
   if (event.target.matches?.('input, textarea')) return;
   if (phase === 'playing') {
@@ -395,8 +388,6 @@ document.addEventListener('keydown', event => {
     if (event.code === 'Escape' || event.code === 'Enter') {
       event.preventDefault();
       openResults();
-    } else if (event.code === 'KeyF' || event.code === 'KeyQ') {
-      inspectFlashlights(run, { [keyboard[event.code]]: true });
     }
   } else if (phase === 'paused' && !event.repeat) {
     if (event.code === 'Escape') resume();
@@ -479,8 +470,7 @@ for (const btn of document.querySelectorAll('[data-touch]')) {
   btn.addEventListener('pointerdown', e => {
     e.preventDefault();
     const action = btn.dataset.touch;
-    if (phase === 'inspect') inspectFlashlights(run, { [action]: true });
-    else if (action === 'pause') pause();
+    if (action === 'pause') pause();
     else if (action === 'openMap') openMapView();
     else queued[action] = true;
   });
@@ -524,7 +514,6 @@ function trackedView(stereo, lead = 0) {
     lead, rig.quaternion, pumpTravel);
   view.tracking.pumpTravel = pumpTravel;
   view.aim = mountedAim(view.tracking.weapon, layout, view.view);
-  view.beam = mountedAim(view.tracking.lamp, layouts.flashlight, view.view);
   return view;
 }
 
@@ -543,14 +532,23 @@ function handleEvent(batch) {
   audio.events(batch, run);
   presentation.events(batch);
   for (const event of batch) {
-    if (event.type === 'dry') setNotice(event.reason, 1.4);
-    else if (event.type === 'pickup') setNotice(event.message, 3.0);
+    if (event.type === 'dry') {
+      setNotice(event.reason, 1.4);
+      xr.haptic('dry', settings);
+    } else if (event.type === 'pickup') setNotice(event.message, 3.0);
     else if (event.type === 'extraction') inspectEscape();
     else if (event.type === 'weaponSwitch') setNotice(GUNS[event.weapon].name, 1.25);
-    else if (event.type === 'light' && event.empty) setNotice('Battery depleted. Recharging.', 2.2);
-    else if (event.type === 'deflect' && run.time > deflectHintAt + 2.8) {
+    else if (event.type === 'dotHit') {
+      xr.haptic('dotHit', settings, handling.braced);
+      if (event.remaining > 0) setNotice(`${event.remaining} green spot${event.remaining > 1 ? 's' : ''} left`, 0.9);
+    } else if (event.type === 'hazardStep') {
+      xr.haptic('hazardStep', settings);
+      setNotice(event.quiet ? `Brushed ${event.kind}` : `Stepped in ${event.kind}!`, 1.1);
+    } else if (event.type === 'wallBump') {
+      xr.haptic('wallBump', settings);
+    } else if (event.type === 'deflect' && run.time > deflectHintAt + 2.8) {
       deflectHintAt = run.time;
-      setNotice(event.revealed ? 'Hit the glowing GREEN weak spot!' : 'Invulnerable in darkness — shine light first!', 2.2);
+      setNotice(event.revealed ? 'Hit the glowing GREEN spots!' : 'Fire to reveal green weak spots first!', 2.0);
     } else if (event.type === 'shot') {
       if (event.weapon === 'shotgun') shotgunFiredAt = run.time;
       handling.kick(settings.leftHanded);
@@ -571,34 +569,27 @@ function perfReport() {
 function updateHUD(force = false) {
   if (!force && run.time < hudAt) return;
   hudAt = run.time + 0.07;
-  const p = run.player, display = Math.ceil(p.battery * 100);
+  const p = run.player;
   text('clock', formatTime(run.time));
-  text('hud-parts', `PARTS ${run.search.parts.length} / ${PARTS_REQUIRED}`);
+  text('hud-parts', DIFFICULTIES[run.difficulty].name.toUpperCase());
   text('weapon-name', GUNS[p.weapon].name.toUpperCase());
   const rounds = count => String(count).padStart(2, '0');
   $('rounds').firstChild.textContent = rounds(p.ammo) + ' ';
-  $('rounds').lastChild.textContent = '/ ' + p.equippedReserve;
-  const light = (p.flashlight ? p.beam.toUpperCase() : 'RECHARGING') + ' · ' + display + '%';
-  text('light-text', light);
-  $('charge').style.transform = 'scaleX(' + p.battery + ')';
-  text('armor', '◆'.repeat(p.armor) + '◇'.repeat(3 - p.armor));
+  $('rounds').lastChild.textContent = '/ ' + p.reserve;
+  const flashHint = p.ammo > 0 ? 'MUZZLE FLASH READY' : p.reserve > 0 ? 'RELOAD' : 'EMPTY · SPARK ONLY';
+  text('light-text', flashHint);
+  $('charge').style.transform = 'scaleX(' + (p.ammo > 0 ? 1 : 0.12) + ')';
+  text('armor', '◆'.repeat(p.armor) + '◇'.repeat(Math.max(0, 1 - p.armor)));
   $('armor').setAttribute('aria-label', p.armor + ' armor charges');
   text('notice', run.time < noticeUntil ? notice : perfReport());
   $('offer').hidden = !run.offer;
-  if (run.offer?.kind === 'antenna') {
-    const label = run.offer.ready
-      ? (touch ? 'TRANSMIT & ESCAPE' : 'E TO TRANSMIT & ESCAPE')
-      : `NEED ALL ${PARTS_REQUIRED} RADIO PARTS (${run.offer.collected}/${run.offer.required})`;
-    text('offer', label);
-  } else if (run.offer) {
+  if (run.offer) {
     text('offer', (touch ? 'EQUIP' : 'E TO EQUIP') + ' · ' + LOOT[run.offer.kind].name);
   }
   const reload = p.reload;
   $('reload-meter').hidden = !reload;
   $('touch-cycle').disabled = Object.keys(p.magazines).length < 2;
-  if (touch) {
-    text('touch-interact', run.offer?.kind === 'antenna' ? 'Transmit' : 'Equip');
-  }
+  if (touch) text('touch-interact', 'Equip');
   if (reload) $('reload-progress').style.transform = 'scaleX(' + (1 - reload.left / reload.duration) + ')';
 }
 
@@ -610,20 +601,18 @@ function xrUI(sample, trackedView) {
   if (phase === 'inspect' || phase === 'extracting') {
     xr.hidePanel();
     xr.drawAimPreview(null);
-    xr.drawPrompt(phase === 'inspect' ? 'A · RESULTS' : RADIO_REPLY, trackedView.view);
+    xr.drawPrompt(phase === 'inspect' ? 'A · RESULTS' : ESCAPE_REPLY, trackedView.view);
     return;
   }
   if (phase === 'playing') {
     xr.hidePanel();
-    const target = run.offer?.kind === 'antenna'
-      ? (run.offer.ready ? 'GRIP  ·  TRANSMIT & ESCAPE' : `NEED ${PARTS_REQUIRED} PARTS (${run.offer.collected}/${run.offer.required})`)
-      : run.offer && 'GRIP  ·  ' + LOOT[run.offer.kind].name;
+    const target = run.offer && 'GRIP  ·  ' + LOOT[run.offer.kind].name;
     xr.drawPrompt(target || (run.time < noticeUntil ? notice : perfReport()), trackedView.view);
     return;
   }
   xr.drawPrompt('', trackedView.view);
   if (phase === 'paused' && mapMode && !calibrating) {
-    const key = `map:${run.search.parts.length}:${run.search.discovered.size}:${Math.floor(run.player.x)}:${Math.floor(run.player.z)}`;
+    const key = `status:${run.player.weapon}:${run.player.ammo}:${run.player.reserve}:${run.player.kills}`;
     if (panelKey !== key) {
       panelKey = key;
       xr.drawMapPanel(run, trackedView.view, 'TRIGGER  ·  RESUME', 'B  ·  PAUSE MENU');
@@ -638,10 +627,10 @@ function xrUI(sample, trackedView) {
       menu: {
         title: 'The Last Night',
         lines: [
-          'Difficulty: ' + DIFFICULTIES[settings.difficulty].name + '   (X changes difficulty)',
-          'Collect 6 radio parts from 20 large cabins.',
-          'Expose dark-green weak spots with your flashlight before shooting.',
-          'Bring all parts to the Radio Tower shown on your Map.',
+          'Difficulty: ' + DIFFICULTIES[settings.difficulty].name + '   (X changes size & danger)',
+          'Dark Labyrinth: Gunfire is your only light. Left hand stabilizes weapon.',
+          'Reveal & destroy 1-3 green weak spots per zombie. Avoid puddles, pebbles & twigs.',
+          'Find ammo caches and reach the single perimeter EXIT.',
         ],
         hint: sample.tracked ? 'WEAPON TRIGGER  ·  START' : 'CONNECT BOTH CONTROLLERS',
         second: 'A  ·  GUN ANGLE',
@@ -650,10 +639,10 @@ function xrUI(sample, trackedView) {
         title: 'Paused',
         lines: [
           pauseReason,
-          `Radio Parts: ${run.search.parts.length} / ${PARTS_REQUIRED}   ·   Cabins: ${run.search.discovered.size} / 20`,
+          `Kills: ${run.player.kills}   ·   Ammo: ${run.player.ammo}/${run.player.reserve}   ·   ${DIFFICULTIES[run.difficulty].name}`,
         ],
         hint: sample.weaponTracked ? 'TRIGGER  ·  RESUME' : 'CONNECT WEAPON CONTROLLER',
-        second: 'B  ·  MAP & INVENTORY      A  ·  GUN ANGLE',
+        second: 'B  ·  SURVIVAL KIT      A  ·  GUN ANGLE',
       },
       angle: {
         title: 'Gun Angle',
@@ -666,11 +655,11 @@ function xrUI(sample, trackedView) {
         second: 'WEAPON GRIP  ·  RESET TO DEFAULT',
       },
       results: {
-        title: run.status === 'escaped' ? 'Escaped' : 'The light went out.',
+        title: run.status === 'escaped' ? 'Escaped' : 'Lost in the dark.',
         lines: [
-          run.status === 'escaped' ? RADIO_REPLY : deathMessage,
+          run.status === 'escaped' ? ESCAPE_REPLY : deathMessage,
           formatTime(run.time) + (run.status === 'escaped' ? ' escape time' : ' survived') + '   /   ' + run.player.kills + ' kills',
-          `Parts: ${run.search.parts.length}/${PARTS_REQUIRED}   /   ${resultNote}`,
+          `${resultNote}`,
         ],
         hint: 'TRIGGER  ·  NEW RUN',
         second: run.status === 'escaped' ? 'GRIP  ·  SAME SEED' : 'GRIP  ·  SAME SEED      A  ·  LOOK AROUND',
@@ -720,9 +709,8 @@ function simulate(t, sample, stereo) {
     const aimed = trackedView(stereo);
     const input = {
       ...state, ...queued, roomX, roomZ,
-      aim: aimed.aim, lamp: aimed.beam,
+      aim: aimed.aim,
       weaponUnavailable: stereo && !aimed.aim,
-      lampUnavailable: stereo && !aimed.beam,
     };
     roomX = roomZ = 0;
     for (const key of Object.keys(queued)) delete queued[key];
@@ -761,7 +749,6 @@ function frame(now, xrFrame) {
         else if (phase === 'paused' && sample.fire && sample.weaponTracked) resume();
       } else if (phase === 'inspect') {
         if (sample.reload) openResults();
-        else inspectFlashlights(run, sample);
       } else if (phase === 'results') {
         if (sample.reload && run.status === 'dead') lookAround();
         else if (performance.now() - deathAt > 950) {
@@ -769,10 +756,10 @@ function frame(now, xrFrame) {
           else if (sample.interact) rematch();
         }
       } else if (phase === 'playing') {
-        if (sample.pause) pause('Field Map & Pause', true);
+        if (sample.pause) pause('Survival Kit & Pause', true);
         else if (!sample.weaponTracked && sample.missingFor > 0.5) pause('Weapon controller tracking was lost.');
         else {
-          for (const key of ['reload', 'cycleWeapon', 'fire', 'toggleLight', 'toggleBeam', 'interact']) {
+          for (const key of ['reload', 'cycleWeapon', 'fire', 'interact']) {
             if (sample[key]) queued[key] = true;
           }
           roomX += sample.roomX; roomZ += sample.roomZ;
@@ -796,12 +783,10 @@ function frame(now, xrFrame) {
   const active = phase === 'playing', inspecting = phase === 'inspect' || phase === 'extracting', p = run.player;
   const laser = active && settings.laserDot;
   aimHit = laser && !p.reload && view.aim ? traceAim(run, view.aim) : null;
-  const lightsActive = (active || inspecting) && p.flashlight;
-  const beam = lightsActive ? resolvePlayerBeam(run, view.beam, view.view?.position) : null;
 
   presentation.update(run, dt, settings, view.tracking, {
-    active, inspecting, stereo, calibration: calibrating, menu: phase === 'menu' && !stereo, beam, offhandBeam: null,
-    aim: active ? view.aim : null, aimHit, offhandAim: null, offhandAimHit: null,
+    active, inspecting, stereo, calibration: calibrating, menu: phase === 'menu' && !stereo,
+    aim: active ? view.aim : null, aimHit,
     viewpoint: view.view?.position,
     enemyAlpha: active ? clamp(accumulator / STEP, 0, 1) : 1,
   });
@@ -810,7 +795,6 @@ function frame(now, xrFrame) {
     audio.listener(view.view.position, direction0.clone().applyQuaternion(view.view.quaternion),
       vertical.clone().applyQuaternion(view.view.quaternion), run);
   }
-  audio.setBuzz(phase === 'playing' ? presentation.state.buzz : null);
 
   if (phase === 'playing' && !stereo) {
     const point = view.aim.origin.clone().addScaledVector(view.aim.ray, 27).project(camera);

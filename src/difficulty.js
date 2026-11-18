@@ -1,16 +1,34 @@
 export const DIFFICULTIES = {
-  easy: {
-    name: 'Easy', speedLimit: 1.00, aggroScale: 0.90,
-    triggerRadius: 3.4, darkSight: 1.5, memorySeconds: 7,
-  },
   standard: {
-    name: 'Normal', speedLimit: 1.12, aggroScale: 1.0,
-    triggerRadius: 4.0, darkSight: 1.8, memorySeconds: 9,
+    name: 'Standard (64 m)',
+    mazeSize: 64,
+    speedLimit: 1.18,
+    aggroScale: 0.94,
+    blindSight: 1.25,
+    memorySeconds: 6.5,
+    maxDots: 2,
+    ammoScale: 1.15,
   },
   hard: {
-    name: 'Hard', speedLimit: 1.12, aggroScale: 1.05,
-    triggerRadius: 4.6, darkSight: 2.1, memorySeconds: 11,
+    name: 'Hard (96 m)',
+    mazeSize: 96,
+    speedLimit: 1.28,
+    aggroScale: 1.0,
+    blindSight: 1.45,
+    memorySeconds: 8.5,
+    maxDots: 3,
+    ammoScale: 0.95,
+  },
+  nightmare: {
+    name: 'Nightmare (144 m)',
+    mazeSize: 144,
+    speedLimit: 1.34,
+    aggroScale: 1.05,
+    blindSight: 1.65,
+    memorySeconds: 10.5,
+    maxDots: 3,
+    ammoScale: 0.80,
   },
 };
 
-export const difficultyKey = value => (value === 'easy' || value === 'hard' ? value : 'standard');
+export const difficultyKey = value => (value === 'hard' || value === 'nightmare' ? value : 'standard');

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GUNS } from './simulation.js';
 
 const forward = new THREE.Vector3(0, 0, -1);
-const names = [...Object.keys(GUNS), 'flashlight', 'glove'];
+const names = [...Object.keys(GUNS), 'glove'];
 const degrees = Math.PI / 180;
 const foregripGuns = new Set(['shotgun', 'smg', 'carbine']);
 const grabDistance = .15;
@@ -15,19 +15,13 @@ const recoilTuning = {
   shotgun: { pitch: 11.5, yaw: .85, travel: .062, recovery: .15 },
   smg: { pitch: 3.2, yaw: .36, travel: .014, recovery: .145 },
   carbine: { pitch: 6.3, yaw: .50, travel: .036, recovery: .105 },
-  flaregun: { pitch: 3.4, yaw: .38, travel: .015, recovery: .10 },
 };
 
 export const gunAngle = value => Math.max(-25, Math.min(25, Math.round(Number.isFinite(value) ? value : 0)));
 const rotation = (pitch, yaw) => new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
 
-export function legendaryBeamLabel(player, leftHanded) {
-  const primary = player.beam.toUpperCase(), offhand = player.offhand.beam.toUpperCase();
-  return leftHanded ? 'R ' + offhand + ' · L ' + primary : 'R ' + primary + ' · L ' + offhand;
-}
-
 export function toolLayouts(art) {
-  const layouts = Object.fromEntries(names.map(name => {
+  return Object.fromEntries(names.map(name => {
     const scene = art[name].scene;
     scene.updateMatrixWorld(true);
     const socket = label => {
@@ -43,14 +37,6 @@ export function toolLayouts(art) {
     const support = name in GUNS ? socket('SupportSocket').multiplyScalar(scale).add(offset) : null;
     return [name, { scale, offset, muzzle, support }];
   }));
-  const lamp = layouts.flashlight, scale = .45;
-  const rail = layouts.pistol.muzzle.clone().add(new THREE.Vector3(0, -.041, .132));
-  layouts.pistolLamp = {
-    scale: lamp.scale * scale,
-    offset: rail.clone().addScaledVector(lamp.offset, scale),
-    muzzle: rail.clone().addScaledVector(lamp.muzzle, scale),
-  };
-  return layouts;
 }
 
 export function heldPose(pose, stereo) {

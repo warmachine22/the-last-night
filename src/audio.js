@@ -156,6 +156,14 @@ export function createAudio() {
       const echo = t > .067 ? low * .75 * Math.exp(-(t - .067) * 20) : 0;
       return Math.tanh((crack + report + echo) * 1.4) * Math.min(1, t * 1800);
     });
+    procedural('pebbles', .28, (t, n, low) => (n * .72 + low * .28) * Math.exp(-t * 16)
+      * (.45 + .55 * Math.sin(2 * Math.PI * 52 * t) ** 2));
+    procedural('branches', .24, (t, n, low) => (n * .85 * Math.exp(-t * 24) + Math.sin(2 * Math.PI * 195 * t) * .35 * Math.exp(-t * 32))
+      * (.55 + .45 * Math.sin(2 * Math.PI * 78 * t) ** 2));
+    procedural('puddles', .36, (t, n, low) => (low * .65 + n * .35) * Math.exp(-t * 9.5) * Math.min(1, t * 90)
+      * (.65 + .35 * Math.cos(2 * Math.PI * 24 * t)));
+    procedural('wallBump', .16, (t, n, low) => (Math.sin(2 * Math.PI * 95 * t) * .55 + low * .45) * Math.exp(-t * 26) * Math.min(1, t * 180));
+    procedural('dotPop', .14, (t, n, low) => (Math.sin(2 * Math.PI * (420 - 240 * t) * t) * .5 + n * .3) * Math.exp(-t * 24));
   }
 
   function play(name, { bus = effects, gain = .4, speed = 1, loc } = {}) {
@@ -277,12 +285,6 @@ export function createAudio() {
       play('creak', { bus: ambience, loc: { x:position.x+Math.cos(a)*d,y:position.y+.8,z:position.z+Math.sin(a)*d },
         gain: .21, speed: .72+Math.random()*.53 });
     }
-    if (!paused && !close && run.time > lastCrow) {
-      const a = Math.random() * Math.PI * 2, d = 16 + Math.random() * 10;
-      lastCrow = run.time + 28 + Math.random() * 27;
-      play('caw', { bus: ambience, loc: { x: position.x + Math.cos(a) * d, y: position.y + 7, z: position.z + Math.sin(a) * d },
-        gain: .16, speed: .9 + Math.random() * .2 });
-    }
   }
 
   // 1.1.0 carcass buzz: one looped, positional, quiet sound. A steady 182 Hz buzz with a fast
@@ -323,17 +325,18 @@ export function createAudio() {
       } else if (e.type === 'reload') {
         play(e.weapon === 'smg' || e.weapon === 'carbine' ? 'reload-smg-short' : e.weapon === 'shotgun' ? 'pump' : 'reload-short',
           { bus: weapons, gain: .35 });
-      } else if (e.type === 'loaded' || e.type === 'reloaded' || e.type === 'dry' || e.type === 'light' || e.type === 'pickup' || e.type === 'weaponSwitch') {
-        play('switch', { gain: e.type === 'dry' ? .36 : .23, speed: e.type === 'pickup' ? 1.57 : 1 });
-      } else if (e.type === 'wallBreak') {
-        play('armor', { gain: .78, loc: e, speed: .54 });
-        play('creak', { gain: .65, loc: e, speed: .62 });
+      } else if (e.type === 'loaded' || e.type === 'reloaded' || e.type === 'dry' || e.type === 'pickup' || e.type === 'weaponSwitch') {
+        play('switch', { gain: e.type === 'dry' ? .42 : .23, speed: e.type === 'dry' ? 1.55 : e.type === 'pickup' ? 1.57 : 1 });
+      } else if (e.type === 'hazardStep') {
+        play(e.kind, { gain: e.quiet ? .25 : .64, loc: e, speed: .9 + Math.random() * .2 });
+      } else if (e.type === 'wallBump') {
+        play('wallBump', { gain: .28, speed: .92 + Math.random() * .18 });
+      } else if (e.type === 'dotHit') {
+        play('dotPop', { gain: .48, loc: e });
       } else if (e.type === 'deflect') {
         play('switch', { gain: .34, loc: e, speed: 1.9 });
       } else if (e.type === 'footstep' || e.type === 'step') {
-        play(e.road ? 'gravel' : 'brush', { gain: e.running ? .055 : .024, speed: .86 + Math.random() * .26 });
-      } else if (e.type === 'flare' || e.type === 'signalFlare') {
-        play('flare', { gain: e.type === 'signalFlare' ? .63 : .39, loc: e });
+        play('gravel', { gain: e.running ? .052 : .021, speed: .86 + Math.random() * .26 });
       } else if (e.type === 'death' || e.type === 'armorHit') {
         play('armor', { gain: .61, speed: e.type === 'death' ? .62 : .91 });
       } else if (e.type === 'swing') {

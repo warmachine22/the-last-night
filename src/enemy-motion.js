@@ -12,6 +12,17 @@ export const HIT_SEGMENTS = [
 export const VITAL_JOINTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 export const VITAL_HIT_RADIUS = 0.145;
 
+export function rollVitalJoints(rng, maxDots = 3) {
+  const count = 1 + Math.floor(rng() * Math.max(1, Math.min(3, maxDots)));
+  const pool = [...VITAL_JOINTS];
+  const chosen = [];
+  while (chosen.length < count && pool.length) {
+    const idx = Math.floor(rng() * pool.length);
+    chosen.push({ joint: pool.splice(idx, 1)[0], destroyed: false });
+  }
+  return chosen;
+}
+
 export function legacyEnemyMotion(enemy, windupSeconds) {
   const gait = (enemy.gait / (Math.PI * 2)) % 1;
   const attacking = enemy.windup > 0;

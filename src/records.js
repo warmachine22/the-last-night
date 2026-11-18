@@ -77,7 +77,7 @@ export function recordRun(run, id, label) {
   const entry = {
     id, initials: initials(label), time: Math.floor(run.time * 100) / 100,
     kills: run.player.kills, headshots: run.player.headshots,
-    parts: run.search.parts.length, escaped: run.status === 'escaped',
+    parts: run.player.kills, escaped: run.status === 'escaped',
     seed: run.seed, version: BUILD, difficulty: difficultyKey(run.difficulty),
   };
   const scores = [...allScores().filter(row => row.id !== id), entry].sort(compare);

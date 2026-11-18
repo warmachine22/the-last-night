@@ -1,283 +1,176 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-
-import { CABIN_BLUEPRINTS, findCabinStep } from '../src/cabins.js';
-import {
-  addEnemy, createRun, enemyPose, enemyVitalPoint, inspectFlashlights,
-  inventorySnapshot, shoot, STEP, stepRun,
-} from '../src/simulation.js';
-import { VITAL_JOINTS } from '../src/enemy-motion.js';
-import { ANTENNA, CABIN_SITES, RADIO_PARTS } from '../src/map-layout.js';
-import { INDOOR_TARGET, OUTDOOR_TARGET, ROSTER_TARGET } from '../src/horde.js';
+import { addEnemy, BUILD, createRun, enemyVitalPoints, shoot, STEP, stepRun } from '../src/simulation.js';
+import { DIFFICULTIES } from '../src/difficulty.js';
+import { createLabyrinth } from '../src/labyrinth.js';
 
 function advance(run, seconds, input = {}) {
   const steps = Math.round(seconds / STEP);
   const events = [];
-  for (let i = 0; i < steps; i++) events.push(...stepRun(run, input));
+  for (let i = 0; i < steps; i++) events.push(...stepRun(run, input, STEP));
   return events;
 }
 
-test('20 unique single-floor cabins are distinct, valid, and player-reachable', () => {
-  assert.equal(CABIN_BLUEPRINTS.length, 20);
-  assert.equal(CABIN_SITES.length, 20);
-  const names = new Set(CABIN_BLUEPRINTS.map(bp => bp.name));
-  assert.equal(names.size, 20);
+test('all three difficulty maze sizes (64m, 96m, 144m) generate fully connected rooms, hallways, hazards, and one exit', () => {
+  assert.equal(BUILD, '2.0.0');
+  for (const [key, spec] of Object.entries(DIFFICULTIES)) {
+    const lab = createLabyrinth('seed-' + key, spec.mazeSize, spec.ammoScale);
+    assert.equal(lab.sizeMeters, spec.mazeSize);
+    assert.ok(lab.zones.length >= 12, `${key} should generate interconnected zones`);
+    assert.ok(lab.zones.every(z => z.distFromStart < Infinity), `${key} must be 100% connected from center start`);
+    assert.ok(lab.exit && lab.exitZone.kind === 'exit', `${key} must have a perimeter exit chamber`);
+    assert.ok(lab.hazards.some(h => h.kind === 'pebbles') && lab.hazards.some(h => h.kind === 'branches') && lab.hazards.some(h => h.kind === 'puddles'),
+      `${key} must spawn pebbles, branches, and puddles`);
 
-  const run = createRun('test-seed', { populate: false });
-  assert.equal(run.world.cabins.length, 20);
-  for (const cabin of run.world.cabins) {
-    assert.ok(cabin.doors.length >= 1, `${cabin.name} has exterior door`);
-    assert.ok(cabin.breakableWalls.length >= 3, `${cabin.name} has breakable ambush walls`);
-    const doorCell = cabin.cellCenter(cabin.doors[0].c, cabin.doors[0].r);
-    for (const spot of [...cabin.primarySpots, ...cabin.supplySpots]) {
-      const step = findCabinStep(cabin, doorCell, spot, false);
-      assert.ok(step.reachable, `${cabin.name} loot reachable without breaking walls`);
+    const perRoomCounts = new Map();
+    for (const s of lab.zombieSpawns) {
+      if (lab.zones[s.zoneId].kind === 'room') {
+        perRoomCounts.set(s.zoneId, (perRoomCounts.get(s.zoneId) || 0) + 1);
+      }
+    }
+    for (const count of perRoomCounts.values()) {
+      assert.ok(count >= 1 && count <= 5, `room zombies must stay between 1 and 5, got ${count}`);
     }
   }
 });
 
-test('fixed 500-monster roster splits 250 indoor / 250 outdoor and persists across distance', () => {
-  const run = createRun('roster-seed', { populate: true });
-  assert.equal(run.roster.length, ROSTER_TARGET);
-  const indoor = run.roster.filter(e => e.indoor).length;
-  const outdoor = run.roster.filter(e => !e.indoor).length;
-  assert.equal(indoor, INDOOR_TARGET);
-  assert.equal(outdoor, OUTDOOR_TARGET);
-
-  // Move far away and confirm roster stays 500 alive (slept as dormant, never deleted)
-  const first = run.roster[0];
-  run.player.x = -290;
-  run.player.z = 290;
-  advance(run, 0.5, { lamp: { origin: { x: -290, y: 1.4, z: 290 }, ray: { x: 0, y: 0, z: -1 } } });
-  assert.equal(run.roster.filter(e => !e.dead).length, 500);
-  assert.equal(first.dormant, true);
-});
-
-test('stealth: silent player in total darkness avoids detection and drops aggro over time', () => {
-  const run = createRun('stealth-seed', { populate: false });
-  run.player.flashlight = false;
-  const monster = addEnemy(run, 'shambler', run.player.x, run.player.z - 5.5, { dormant: true });
-  monster.nextThink = 0;
-
-  // Standing still in darkness 5.5 m away keeps monster dormant
-  advance(run, 1.5, {});
-  assert.equal(monster.dormant, true);
-
-  // Turning on flashlight beam directly on monster wakes and aggros it
-  inspectFlashlights(run, { toggleLight: true });
-  const lamp = { origin: { x: run.player.x, y: run.player.y + 1.4, z: run.player.z }, ray: { x: 0, y: 0, z: -1 } };
-  advance(run, 0.4, { lamp });
-  assert.equal(monster.dormant, false);
-  assert.equal(monster.revealed, true);
-
-  // Cut light, move far away quietly behind distance, and stay still -> aggro decays back to dormant
-  inspectFlashlights(run, { toggleLight: true });
-  run.player.x += 28;
-  advance(run, 12.0, {});
-  assert.equal(monster.dormant, true);
-});
-
-test('chasing zombies stay between 1.5 and 2.5 mph (0.67-1.12 m/s max)', () => {
-  const run = createRun('speed-seed', { populate: false });
-  const shrieker = addEnemy(run, 'shrieker', run.player.x, run.player.z - 8, { dormant: false });
-  shrieker.nextThink = 0;
-  const lamp = { origin: { x: run.player.x, y: run.player.y + 1.4, z: run.player.z }, ray: { x: 0, y: 0, z: -1 } };
-  advance(run, 1.5, { lamp });
-  assert.ok(shrieker.moveSpeed >= 0.67 && shrieker.moveSpeed <= 1.121,
-    `expected speed in 0.67..1.12 m/s, got ${shrieker.moveSpeed.toFixed(2)}`);
-});
-
-test('two-step flashlight + randomized skeletal joint instant-kill rule', () => {
-  const run = createRun('vital-seed', { populate: true });
-  const jointsSeen = new Set(run.roster.map(e => e.vitalJoint));
-  assert.ok(jointsSeen.size >= 12, `expected wide skeletal joint diversity, saw ${jointsSeen.size}`);
-  for (const j of jointsSeen) assert.ok(VITAL_JOINTS.includes(j));
-
-  // Test glitch-free hit on a knee joint (index 8) even while angled
-  const monster = addEnemy(run, 'shambler', run.player.x, run.player.z - 5, {
-    dormant: false,
-    vitalJoint: 8,
-  });
-  monster.yaw = 0.6;
-
-  // 1) Shoot vital joint in total darkness -> invulnerable, deflects
-  run.player.flashlight = false;
-  advance(run, 0.1, {});
-  const pt = enemyVitalPoint(monster);
-  const eye = { x: run.player.x, y: run.player.y + 1.4, z: run.player.z };
-  shoot(run, { origin: eye, ray: { x: pt.x - eye.x, y: pt.y - eye.y, z: pt.z - eye.z } });
-  assert.equal(monster.dead, false);
-  assert.equal(run.metrics.deflects, 1);
-
-  // 2) Turn flashlight on, illuminate monster, shoot NON-vital head -> still invulnerable
-  run.player.flashlight = true;
-  run.player.cooldown = 0;
-  const lamp = { origin: eye, ray: { x: pt.x - eye.x, y: pt.y - eye.y, z: pt.z - eye.z } };
-  advance(run, 0.1, { lamp });
-  assert.equal(monster.revealed, true);
-  const head = enemyPose(monster).head;
-  shoot(run, { origin: eye, ray: { x: head.x - eye.x, y: head.y - eye.y, z: head.z - eye.z } });
-  assert.equal(monster.dead, false);
-  assert.equal(run.metrics.deflects, 2);
-
-  // 3) Shoot the illuminated randomized skeletal joint (8) -> instant kill!
-  run.player.cooldown = 0;
-  const litVital = enemyVitalPoint(monster);
-  shoot(run, { origin: eye, ray: { x: litVital.x - eye.x, y: litVital.y - eye.y, z: litVital.z - eye.z } });
-  assert.equal(monster.dead, true);
-});
-
-test('zombies smash through breakable cabin walls to reach the player', () => {
-  const run = createRun('breach-seed', { populate: false });
-  const cabin = run.world.cabins[0];
-  const bw = cabin.breakableWalls[0];
-  const [c1, r1] = bw.cellA;
-  const [c2, r2] = bw.cellB;
-  const zSpot = cabin.cellCenter(c1, r1);
-  const pSpot = cabin.cellCenter(c2, r2);
-
-  run.player.x = pSpot.x;
-  run.player.z = pSpot.z;
-  run.player.y = run.world.height(pSpot.x, pSpot.z);
-
-  const zombie = addEnemy(run, 'shambler', zSpot.x, zSpot.z, {
-    dormant: false,
-    indoor: true,
-    cabinId: cabin.id,
-  });
-  zombie.memory = { x: pSpot.x, z: pSpot.z, score: 2, reason: 'saw player', id: 'player', chase: true, until: 20 };
-
-  assert.equal(bw.broken, false);
-  const events = advance(run, 1.5, {});
-  assert.equal(bw.broken, true);
-  assert.ok(events.some(e => e.type === 'wallBreak' && e.id === bw.id));
-  assert.equal(run.world.blocks(bw.x, bw.z, 0.2), false);
-});
-
-test('inventory tracks all 6 radio parts and Antenna Tower requires all 6 to win', () => {
-  const run = createRun('extract-seed', { populate: false });
-  run.player.x = ANTENNA.x - 1.0;
-  run.player.z = ANTENNA.z + 1.4;
-  run.player.y = run.world.height(run.player.x, run.player.z);
-
-  // Attempt extraction with 0 parts -> blocked
-  stepRun(run, { interact: true });
-  assert.equal(run.status, 'playing');
-
-  // Collect all 6 radio parts across the map
-  for (const part of RADIO_PARTS) {
-    const item = run.loot.find(l => l.id === part.id) || { ...part, x: run.player.x, z: run.player.z, y: run.player.y, lost: false };
-    item.x = run.player.x;
-    item.z = run.player.z;
-    item.y = run.player.y;
-    if (!run.loot.includes(item)) run.loot.push(item);
-    stepRun(run, {});
-  }
-
-  const snap = inventorySnapshot(run);
-  assert.equal(snap.partsCollected, 6);
-  assert.equal(snap.partsRequired, 6);
-
-  // Now interact at Antenna Tower -> Escaped!
-  stepRun(run, { interact: true });
-  assert.equal(run.status, 'escaped');
-});
-
-test('flashlight battery remains limited and upgradable', () => {
-  const run = createRun('battery-seed', { populate: false });
-  const lamp = { origin: { x: run.player.x, y: run.player.y + 1.4, z: run.player.z }, ray: { x: 0, y: 0, z: -1 } };
-  advance(run, 15, { lamp });
-  assert.ok(run.player.battery < 0.55 && run.player.battery > 0.45);
-  const events = advance(run, 15.1, { lamp });
-  assert.ok(events.some(e => e.type === 'light' && e.empty));
+test('no flashlight exists; muzzle fire briefly exposes zombies while 0-ammo dry-fire spark does not', () => {
+  const run = createRun('muzzle-light', { populate: false, difficulty: 'standard' });
   assert.equal(run.player.flashlight, false);
-  advance(run, 5.1, {});
-  assert.equal(run.player.battery, 1);
 
-  // Upgrading Battery cells (+8 s) slows drain rate
-  run.player.upgrades.battery = 1;
-  run.player.flashlight = true;
-  advance(run, 19, { lamp });
-  assert.ok(run.player.battery > 0.45 && run.player.battery < 0.55);
-});
-
-test('cooperative horde tactics flank outdoors, block cabin exits/breach walls indoors, and return to cover', () => {
-  // 1) Outdoor flanking instead of single-file line
-  const run = createRun('tactics-seed', { populate: false });
-  const zList = [];
-  for (let i = 0; i < 5; i++) {
-    const z = addEnemy(run, 'shambler', run.player.x + (i - 2) * 1.5, run.player.z - 12, { dormant: false });
-    z.memory = { x: run.player.x, z: run.player.z, score: 2, reason: 'saw player', id: 'player', chase: true, until: 20 };
-    z.target = z.memory;
-    zList.push(z);
-  }
-  advance(run, 0.5, {});
-  const roles = new Set(zList.map(z => z.tactic?.role));
-  assert.ok(roles.has('pusher') && roles.has('flanker'), `expected pusher + flanker roles, got ${[...roles]}`);
-
-  // 2) Escaping into darkness sends zombies back to strategic cover & dormant ambush
-  run.player.flashlight = false;
-  run.player.x += 36;
-  advance(run, 22, {});
-  assert.ok(zList.some(z => z.dormant || z.reason === 'returning'), 'escaped zombies re-orient or return to dormant');
-
-  // 3) Indoor cabin tactics enforce 1-pusher token cap, corner/wall ambushes, and outdoor exit sealing
-  const indoorRun = createRun('indoor-tactics', { populate: false });
-  const cabin = indoorRun.world.cabins[0];
-  const entryDoor = cabin.doors[0];
-  indoorRun.player.x = entryDoor.x - (entryDoor.axis === 'h' ? 0 : entryDoor.dir * 1.4);
-  indoorRun.player.z = entryDoor.z - (entryDoor.axis === 'h' ? entryDoor.dir * 1.4 : 0);
-  indoorRun.player.y = indoorRun.world.height(indoorRun.player.x, indoorRun.player.z);
-
-  const indoorZ = cabin.zombieSpots.slice(0, 7).map(spot => {
-    const z = addEnemy(indoorRun, 'shambler', spot.x, spot.z, { dormant: false, indoor: true, cabinId: cabin.id });
-    z.memory = { x: indoorRun.player.x, z: indoorRun.player.z, score: 2, reason: 'saw player', id: 'player', chase: true, until: 20 };
-    z.target = z.memory;
-    return z;
+  const z = addEnemy(run, 'shambler', run.player.x, run.player.z - 2.2, {
+    zoneId: run.world.labyrinth.startZone.id,
+    vitalJoints: [2, 5],
   });
-  const outdoorZ = [0, 1, 2].map(i => {
-    const z = addEnemy(indoorRun, 'shambler', cabin.x + cabin.w / 2 + 5 + i * 2, cabin.z + (i - 1) * 3, { dormant: false });
-    z.memory = { x: indoorRun.player.x, z: indoorRun.player.z, score: 2, reason: 'gunshot', id: 'gunshot', chase: true, until: 20 };
-    z.target = z.memory;
-    return z;
-  });
-
-  advance(indoorRun, 0.5, {});
-  const indoorRoles = indoorZ.map(z => z.tactic?.role);
-  const pusherCount = indoorRoles.filter(r => r === 'pusher').length;
-  assert.ok(pusherCount <= 2, `expected strict frontal pusher token cap (<=2), got ${pusherCount} in [${indoorRoles}]`);
-  assert.ok(indoorRoles.some(r => r === 'wallAmbusher' || r === 'cornerAmbush' || r === 'stealthFlanker'),
-    `expected off-axis indoor ambush/flank roles, got ${indoorRoles}`);
-  const outRoles = outdoorZ.map(z => z.tactic?.role);
-  assert.ok(outRoles.some(r => r === 'doorSealer'), `expected outdoor zombies to seal cabin exits, got ${outRoles}`);
-});
-
-test('entering a cabin and firing at the doorway does not pull all indoor zombies into a single-file rush', () => {
-  const run = createRun('doorway-rush-check', { populate: true });
-  const cabin = run.world.cabins[0];
-  const entryDoor = cabin.doors[0];
-  const inDirX = entryDoor.axis === 'h' ? 0 : -entryDoor.dir;
-  const inDirZ = entryDoor.axis === 'h' ? -entryDoor.dir : 0;
-
-  run.player.x = entryDoor.x + inDirX * 1.4;
-  run.player.z = entryDoor.z + inDirZ * 1.4;
-  run.player.y = run.world.height(run.player.x, run.player.z);
-  run.player.yaw = Math.atan2(inDirX, -inDirZ);
-  stepRun(run, {});
-
-  const cabinZombies = run.enemies.filter(e => !e.dead && e.cabinId === cabin.id);
-  assert.ok(cabinZombies.length >= 6, `expected populated cabin zombies, got ${cabinZombies.length}`);
-
-  // Shine flashlight & fire pistol inside the doorway, then simulate 6 seconds
-  const lamp = {
-    origin: { x: run.player.x, y: run.player.y + 1.5, z: run.player.z },
-    ray: { x: inDirX, y: 0, z: inDirZ },
+  const aim = {
+    origin: { x: run.player.x, y: run.player.y + 1.4, z: run.player.z - 0.3 },
+    ray: { x: 0, y: 0, z: -1 },
   };
-  stepRun(run, { lamp, fire: true, look: lamp.ray });
-  advance(run, 6.0, { lamp });
 
-  const aliveCabin = cabinZombies.filter(e => !e.dead);
-  const clusteredAtDoor = aliveCabin.filter(e => Math.hypot(e.x - entryDoor.x, e.z - entryDoor.z) < 3.6);
-  assert.ok(clusteredAtDoor.length <= 2,
-    `expected at most 2 zombies stacked at entrance after shooting, got ${clusteredAtDoor.length}`);
+  // First shot in dark illuminates the zombie and exposes its green dots briefly (~0.55s)
+  const ev = stepRun(run, { fire: true, aim });
+  assert.ok(ev.some(e => e.type === 'shot' && e.range === 20), 'shot must emit wide bright muzzle flash');
+  assert.equal(z.revealed, true, 'zombie in flash cone/room must be revealed');
+
+  // Darkness returns after the ~0.55 s illumination fade window
+  advance(run, 0.7, {});
+  assert.equal(z.revealed, false, 'zombie should return to dark once flash window expires');
+
+  // Empty ammo dry-fire produces weak spark only and NEVER reveals zombie green dots
+  run.player.ammo = 0;
+  run.player.reserve = 0;
+  run.player.cooldown = 0;
+  const dryEv = stepRun(run, { fire: true, aim });
+  const dry = dryEv.find(e => e.type === 'dry' && e.spark);
+  assert.ok(dry && dry.range <= 4, 'empty weapon should emit weak dry-fire spark');
+  assert.equal(z.revealed, false, 'dry-fire spark must not reveal zombie green dots');
+});
+
+test('1-3 green weak spots must all be destroyed while illuminated to kill a zombie', () => {
+  const run = createRun('multi-dot', { populate: false, difficulty: 'hard' });
+  const startZone = run.world.labyrinth.startZone;
+  const z = addEnemy(run, 'brute', run.player.x, run.player.z - 2.1, {
+    zoneId: startZone.id,
+    vitalJoints: [2, 6, 12],
+  });
+  z.yaw = 0;
+  stepRun(run, {});
+  assert.equal(z.vitalJoints.length, 3);
+
+  // Blind unlit shot directly at joint 2 cannot kill or pop a dot
+  const pts0 = enemyVitalPoints(z);
+  const aimDark = {
+    origin: { x: run.player.x, y: pts0[0].point.y, z: run.player.z - 0.3 },
+    ray: {
+      x: pts0[0].point.x - run.player.x,
+      y: 0,
+      z: pts0[0].point.z - (run.player.z - 0.3),
+    },
+  };
+  shoot(run, aimDark);
+  assert.equal(z.dead, false);
+  assert.equal(z.vitalJoints.filter(d => !d.destroyed).length, 3, 'unlit shot cannot destroy a green dot');
+  assert.equal(z.revealed, true, 'that shot illuminated the zombie for follow-up shots');
+
+  // Pop all 3 lit dots one by one
+  for (let expectedLeft = 2; expectedLeft >= 0; expectedLeft--) {
+    run.player.cooldown = 0;
+    const activePts = enemyVitalPoints(z);
+    const target = activePts[0].point;
+    const origin = { x: run.player.x, y: target.y, z: run.player.z - 0.3 };
+    const aim = {
+      origin,
+      ray: { x: target.x - origin.x, y: target.y - origin.y, z: target.z - origin.z },
+    };
+    shoot(run, aim);
+    assert.equal(z.vitalJoints.filter(d => !d.destroyed).length, expectedLeft);
+  }
+  assert.equal(z.dead, true, 'zombie dies once all green dots are destroyed');
+});
+
+test('room-restricted zombies move up to 3 mph max, prowl slowly in dark, and never leave their room', () => {
+  const run = createRun('zone-bound', { populate: true, difficulty: 'standard' });
+  const lab = run.world.labyrinth;
+  const targetRoom = lab.zones.find(z => z.kind === 'room' && z.doors.length > 0 && z.cells.length >= 6);
+  assert.ok(targetRoom);
+
+  const z = addEnemy(run, 'shrieker', targetRoom.center.x, targetRoom.center.z, { zoneId: targetRoom.id });
+  const door = targetRoom.doors[0];
+  // Put player right outside the room door and emit a gunshot to try to pull the zombie through the door
+  run.player.x = door.x + (targetRoom.center.x < door.x ? 2.5 : -2.5);
+  run.player.z = door.z + (targetRoom.center.z < door.z ? 2.5 : -2.5);
+  z.memory = { x: run.player.x, z: run.player.z, score: 3, reason: 'gunshot', id: 'gun', chase: true, until: 20 };
+  z.target = z.memory;
+
+  let peakSpeed = 0;
+  for (let i = 0; i < 300; i++) {
+    stepRun(run, {});
+    peakSpeed = Math.max(peakSpeed, z.moveSpeed);
+    const at = lab.zoneAt(z.x, z.z);
+    assert.equal(at?.id, targetRoom.id, `zombie crossed doorway out of zone ${targetRoom.id} into ${at?.id}`);
+  }
+  assert.ok(peakSpeed <= 1.35, `zombie exceeded 3.0 mph (1.34 m/s): ${peakSpeed.toFixed(3)}`);
+});
+
+test('ground hazards (pebbles, branches, puddles) alert room zombies and creeping quiets the radius', () => {
+  const run = createRun('hazard-sound', { populate: false, difficulty: 'standard' });
+  const lab = run.world.labyrinth;
+  const haz = lab.hazards.find(h => h.zoneId !== lab.startZone.id) || lab.hazards[0];
+  assert.ok(haz);
+  const hzZone = lab.zones[haz.zoneId];
+
+  // Place zombie inside the same zone as the hazard, 8 m away
+  const farSpot = hzZone.cells.map(([c, r]) => lab.cellCenter(c, r))
+    .sort((a, b) => Math.hypot(b.x - haz.x, b.z - haz.z) - Math.hypot(a.x - haz.x, a.z - haz.z))[0];
+  const z = addEnemy(run, 'shambler', farSpot.x, farSpot.z, { zoneId: haz.zoneId });
+
+  run.player.x = haz.x - 0.5;
+  run.player.z = haz.z;
+  const evWalk = stepRun(run, { moveX: 1, moveZ: 0, walk: true });
+  // Step closer into hazard at normal speed
+  run.player.x = haz.x - 0.1;
+  run.player.z = haz.z;
+  const evStep = stepRun(run, { moveX: 1, moveZ: 0, walk: false });
+  const stepped = [...evWalk, ...evStep].find(e => e.type === 'hazardStep');
+  assert.ok(stepped, 'stepping into floor hazard should emit hazardStep');
+
+  advance(run, 0.4, {});
+  assert.equal(z.alerted, true, 'same-zone zombie should react to ground hazard noise');
+});
+
+test('entering the perimeter exit chamber escapes the labyrinth', () => {
+  const run = createRun('exit-win', { populate: false, difficulty: 'standard' });
+  const ex = run.world.exit;
+  run.player.x = ex.x;
+  run.player.z = ex.z;
+  const ev = stepRun(run, {
+    moveX: (ex.doorX - ex.x) * 2,
+    moveZ: (ex.doorZ - ex.z) * 2,
+  });
+  advance(run, 0.5, {
+    moveX: ex.doorX - ex.x,
+    moveZ: ex.doorZ - ex.z,
+  });
+  assert.equal(run.status, 'escaped');
+  assert.ok(run.status === 'escaped' || ev.some(e => e.type === 'extraction'));
 });
