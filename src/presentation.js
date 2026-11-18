@@ -431,11 +431,34 @@ export function createPresentation(scene, art, layouts) {
   const effects = [];
   const effectGeometry = new THREE.TetrahedronGeometry(0.038);
   const effectMaterials = {
-    body: new THREE.MeshStandardMaterial({ color: 0x267432 }),
+    body: new THREE.MeshStandardMaterial({ color: 0x6b0608 }),
     other: new THREE.MeshStandardMaterial({ color: 0xb09b7e }),
     armor: new THREE.MeshBasicMaterial({ color: 0xb4d8ff, toneMapped: false }),
     casing: new THREE.MeshStandardMaterial({ color: 0x988257, roughness: 0.4, metalness: 0.5 }),
   };
+
+  // Single-draw-call instanced blood droplets + floor splatters & lightweight crimson wound mist
+  const MAX_BLOOD = 96;
+  const bloodMesh = new THREE.InstancedMesh(
+    new THREE.DodecahedronGeometry(0.034, 0),
+    new THREE.MeshStandardMaterial({
+      color: 0x6b0608, emissive: 0x2a0203, emissiveIntensity: 0.72, roughness: 0.24, metalness: 0.14,
+    }),
+    MAX_BLOOD,
+  );
+  bloodMesh.count = 0;
+  bloodMesh.visible = false;
+  bloodMesh.frustumCulled = false;
+  scene.add(bloodMesh);
+  const bloodDrops = [];
+  const mistPool = Array.from({ length: 10 }, () => {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glow, color: 0x840a0c, depthWrite: false, transparent: true, opacity: 0,
+    }));
+    s.visible = false;
+    scene.add(s);
+    return { sprite: s, active: false, age: 0, life: 0.26, base: 0.2, growth: 0.4 };
+  });
 
   const flashTuning = {
     pistol: { power: 520, bouncePower: 14, bounceRange: 11, size: 1.15, duration: 0.22 },
@@ -570,6 +593,10 @@ export function createPresentation(scene, art, layouts) {
     for (const view of pickups.values()) discardLoot(view);
     pickups.clear();
     for (const effect of effects.splice(0)) { effect.mesh.visible = false; impactPool.push(effect.mesh); }
+    bloodDrops.length = 0;
+    bloodMesh.count = 0;
+    bloodMesh.visible = false;
+    for (const m of mistPool) { m.active = false; m.sprite.visible = false; }
     flashState.shot = null;
     const ex = run.world.exit;
     if (ex) {
@@ -775,7 +802,50 @@ export function createPresentation(scene, art, layouts) {
     for (const [id, view] of pickups) if (!desired.has(id)) { discardLoot(view); pickups.delete(id); }
   }
 
+  function spawnBlood(event) {
+    const head = Boolean(event.head);
+    const kill = Boolean(event.kill);
+    const rx = event.rx || 0, ry = event.ry || 0, rz = event.rz || 0;
+    const count = quality === 1 ? 4 : head || kill ? 13 : 8;
+    for (let i = 0; i < count; i++) {
+      const ooze = i >= Math.ceil(count * 0.62);
+      const speed = ooze ? 0.2 + Math.random() * 0.6 : (head ? 2.4 : 1.7) + Math.random() * 2.2;
+      const spread = ooze ? 0.55 : 0.95;
+      const vx = rx * speed * (ooze ? 0.2 : 0.75) + (Math.random() - 0.5) * speed * spread;
+      const vy = (ooze ? -0.25 + Math.random() * 0.45 : (head ? 1.15 : 0.55) + Math.random() * 1.9);
+      const vz = rz * speed * (ooze ? 0.2 : 0.75) + (Math.random() - 0.5) * speed * spread;
+      const sc = (head ? 1.15 : 0.85) + Math.random() * 0.65;
+      const drop = {
+        x: event.x + (Math.random() - 0.5) * 0.08,
+        y: event.y + (Math.random() - 0.5) * 0.08,
+        z: event.z + (Math.random() - 0.5) * 0.08,
+        vx, vy, vz,
+        sc,
+        ooze,
+        splat: false,
+        age: ooze ? 0.75 + Math.random() * 0.4 : 1.1 + Math.random() * 0.5,
+      };
+      if (bloodDrops.length >= MAX_BLOOD) bloodDrops.shift();
+      bloodDrops.push(drop);
+    }
+
+    const mist = mistPool.find(m => !m.active) || mistPool[0];
+    mist.active = true;
+    mist.age = 0;
+    mist.life = head || kill ? 0.30 : 0.24;
+    mist.base = head ? 0.24 : 0.16;
+    mist.growth = head || kill ? 0.58 : 0.36;
+    mist.sprite.position.set(event.x, event.y, event.z);
+    mist.sprite.scale.setScalar(mist.base);
+    mist.sprite.material.opacity = head ? 0.78 : 0.62;
+    mist.sprite.visible = true;
+  }
+
   function debris(event, weapon = '') {
+    if (!weapon && event.surface === 'body') {
+      spawnBlood(event);
+      return;
+    }
     const amount = weapon ? 1 : quality > 1 ? 5 : 2;
     for (let i = 0; i < amount; i++) {
       if (effects.length > 60) return;
@@ -1004,6 +1074,58 @@ export function createPresentation(scene, art, layouts) {
         impactPool.push(effect.mesh);
         effects.splice(i, 1);
       }
+    }
+
+    if (bloodDrops.length) {
+      for (let i = bloodDrops.length - 1; i >= 0; i--) {
+        const d = bloodDrops[i];
+        d.age -= dt;
+        if (d.age <= 0) {
+          bloodDrops.splice(i, 1);
+          continue;
+        }
+        if (!d.splat) {
+          d.vy -= (d.ooze ? 3.8 : 9.8) * dt;
+          d.x += d.vx * dt;
+          d.y += d.vy * dt;
+          d.z += d.vz * dt;
+          if (d.y <= 0.014) {
+            d.y = 0.014;
+            d.vx = d.vy = d.vz = 0;
+            d.splat = true;
+            d.age = Math.min(d.age, 1.0);
+          }
+        }
+      }
+      for (let i = 0; i < bloodDrops.length; i++) {
+        const d = bloodDrops[i];
+        if (d.splat) {
+          const fade = Math.min(1, d.age * 2.5);
+          place(bloodMesh, i, d.x, d.y, d.z, d.sc * 2.1 * fade, d.sc * 0.14, d.sc * 2.1 * fade, i * 0.9);
+        } else {
+          place(bloodMesh, i, d.x, d.y, d.z, d.sc * (d.ooze ? 0.72 : 1), d.sc * (d.ooze ? 1.85 : 1), d.sc * (d.ooze ? 0.72 : 1), i);
+        }
+      }
+      bloodMesh.count = bloodDrops.length;
+      bloodMesh.visible = bloodDrops.length > 0;
+      if (bloodDrops.length > 0) bloodMesh.instanceMatrix.needsUpdate = true;
+    } else if (bloodMesh.visible) {
+      bloodMesh.count = 0;
+      bloodMesh.visible = false;
+    }
+
+    for (const m of mistPool) {
+      if (!m.active) continue;
+      m.age += dt;
+      if (m.age >= m.life) {
+        m.active = false;
+        m.sprite.visible = false;
+        continue;
+      }
+      const prog = m.age / m.life;
+      const sz = m.base + m.growth * prog;
+      m.sprite.scale.set(sz, sz, 1);
+      m.sprite.material.opacity = (1 - prog) * 0.68;
     }
   }
 

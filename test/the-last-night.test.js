@@ -15,7 +15,7 @@ function advance(run, seconds, input = {}) {
 }
 
 test('all three difficulty maze sizes (78m, 114m, 156m) have high ceilings, mix of tight and big spaces, and one exit', () => {
-  assert.equal(BUILD, '2.4.2');
+  assert.equal(BUILD, '2.4.3');
   assert.equal(CHUNK, 24);
   assert.equal(MAX_ACTIVE_ZOMBIES, 18);
   assert.ok(LABYRINTH_HEIGHT >= 4.0, `ceiling height should be tall (>=4.0m), got ${LABYRINTH_HEIGHT}`);
@@ -82,11 +82,15 @@ test('1 headshot kills regulars, 2-3 body shots kill regulars, brutes need 3 hea
   });
 
   const sham1 = addEnemy(run, 'shambler', run.player.x, run.player.z - 2.1, { zoneId });
+  run.events = [];
   shoot(run, aimAt(enemyPose(sham1).head));
   assert.equal(sham1.dead, true);
+  assert.ok(run.events.some(e => e.type === 'impact' && e.surface === 'body' && e.head === true && e.kill === true));
 
   const sham2 = addEnemy(run, 'shambler', run.player.x + 0.5, run.player.z - 2.1, { zoneId });
+  run.events = [];
   for (let i = 0; i < 2; i++) { run.player.cooldown = 0; shoot(run, aimAt(enemyPose(sham2).torso)); assert.equal(sham2.dead, false); }
+  assert.ok(run.events.some(e => e.type === 'impact' && e.surface === 'body' && e.head === false && e.kill === false));
   run.player.cooldown = 0;
   shoot(run, aimAt(enemyPose(sham2).torso));
   assert.equal(sham2.dead, true);

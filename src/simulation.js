@@ -9,7 +9,7 @@ import { findMazeStep, MAX_PURSUIT_PLAYER_DIST, MAX_TETHER_FROM_HOME, updateHord
 import { angleDelta, clamp, createWorld, direction, distance, random, START } from './world.js';
 
 export const STEP = 1 / 30;
-export const BUILD = '2.4.2';
+export const BUILD = '2.4.3';
 
 export const GUNS = {
   pistol: { name: 'Service pistol', capacities: [12, 16, 20, 24], reload: 1.45, interval: 0.28, range: 48, damage: 1, noise: 22, rounds: 1, spread: 0 },
@@ -559,8 +559,8 @@ export function shoot(run, aim) {
       const penetrates = 1 + (p.weapon === 'shotgun' && shot !== 0 ? 0 : p.upgrades.pierce);
       for (let i = 0; i < Math.min(penetrates, candidates.length); i++) {
         const hit = candidates[i];
-        const current = hits.get(hit.e) || { head: false, leg: false, point: hit.point };
-        if (hit.head) current.head = true;
+        const current = hits.get(hit.e) || { head: false, leg: false, point: hit.point, zone: hit.zone };
+        if (hit.head) { current.head = true; current.point = hit.point; current.zone = 'head'; }
         if (hit.zone === 'leg') current.leg = true;
         hits.set(hit.e, current);
       }
@@ -581,7 +581,16 @@ export function shoot(run, aim) {
       const bonus = Math.floor((p.upgrades.damage || 0) / 2);
       const dmg = hit.head ? (enemy.kind === 'brute' ? 2 + bonus : enemy.hp) : 1 + bonus;
       enemy.hp -= dmg;
-      emit(run, 'impact', { ...hit.point, surface: 'body' });
+      emit(run, 'impact', {
+        ...hit.point,
+        surface: 'body',
+        head: hit.head,
+        zone: hit.zone,
+        rx: center.x,
+        ry: center.y,
+        rz: center.z,
+        kill: enemy.hp <= 0,
+      });
 
       if (enemy.hp <= 0) {
         eliminate(run, enemy, hit.head);
