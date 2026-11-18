@@ -164,7 +164,6 @@ export function createAudio() {
       * (.65 + .35 * Math.cos(2 * Math.PI * 24 * t)));
     procedural('wallBump', .16, (t, n, low) => (Math.sin(2 * Math.PI * 95 * t) * .55 + low * .45) * Math.exp(-t * 26) * Math.min(1, t * 180));
     procedural('dotPop', .14, (t, n, low) => (Math.sin(2 * Math.PI * (420 - 240 * t) * t) * .5 + n * .3) * Math.exp(-t * 24));
-    procedural('spray', .14, (t, n, low) => (n * .78 - low * .24) * .55 * Math.sin(Math.PI * t / .14) ** .6);
   }
 
   function play(name, { bus = effects, gain = .4, speed = 1, loc } = {}) {
@@ -332,8 +331,6 @@ export function createAudio() {
         play(e.kind, { gain: e.quiet ? .25 : .64, loc: e, speed: .9 + Math.random() * .2 });
       } else if (e.type === 'wallBump') {
         play('wallBump', { gain: .28, speed: .92 + Math.random() * .18 });
-      } else if (e.type === 'spray' && e.sound) {
-        play('spray', { gain: .24, speed: .95 + Math.random() * .10 });
       } else if (e.type === 'dotHit') {
         play('dotPop', { gain: .48, loc: e });
       } else if (e.type === 'deflect') {

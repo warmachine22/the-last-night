@@ -1,6 +1,7 @@
-export const LABYRINTH_CELL = 2.0;
-export const LABYRINTH_HEIGHT = 2.95;
-export const LABYRINTH_DOOR_HEIGHT = 2.15;
+export const LABYRINTH_CELL = 3.0;
+export const LABYRINTH_HEIGHT = 4.35;
+export const LABYRINTH_DOOR_HEIGHT = 2.65;
+export const LABYRINTH_JAMB = 0.50;
 
 function hash(value) {
   let h = 2166136261;
@@ -108,15 +109,19 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
   }
   const startZone = registerZone('start', startCells);
 
-  // 2) Scatter varied Small (2x2..3x3) and Large (4x3..6x5) rooms leaving space for hallways
+  // 2) Scatter a mix of tight spaces (2x2..3x2), medium rooms (3x3..4x3), and big grand chambers (5x4..7x5)
   const targetRoomAttempts = Math.round((cols * rows) / 6.5);
   for (let attempt = 0; attempt < targetRoomAttempts; attempt++) {
-    const isLarge = rng() < 0.34;
-    const rw = isLarge ? 4 + Math.floor(rng() * 3) : 2 + Math.floor(rng() * 2);
-    const rh = isLarge ? 3 + Math.floor(rng() * 3) : 2 + Math.floor(rng() * 2);
+    const sizeRoll = rng();
+    const rw = sizeRoll < 0.28 ? 5 + Math.floor(rng() * 3)
+      : sizeRoll < 0.60 ? 3 + Math.floor(rng() * 2)
+      : 2 + Math.floor(rng() * 2);
+    const rh = sizeRoll < 0.28 ? 4 + Math.floor(rng() * 2)
+      : sizeRoll < 0.60 ? 3 + Math.floor(rng() * 2)
+      : 2;
     const c0 = Math.floor(rng() * (cols - rw + 1));
     const r0 = Math.floor(rng() * (rows - rh + 1));
-    const pad = rng() < 0.65 ? 1 : 0; // mostly leave 1-cell hallway strips between rooms
+    const pad = rng() < 0.62 ? 1 : 0; // mostly leave hallway strips between rooms
 
     let overlaps = false;
     for (let r = Math.max(0, r0 - pad); r <= Math.min(rows - 1, r0 + rh - 1 + pad) && !overlaps; r++) {
@@ -133,19 +138,32 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
     registerZone('room', cells);
   }
 
-  // 3) Carve remaining unassigned cells into interconnected Hallway segments (3-8 cells per segment)
+  // 3) Carve remaining unassigned cells into tight (1-cell = 3 m) and occasional wide (2-cell = 6 m) hallway segments
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       if (owner[r][c] !== -1) continue;
       const hallCells = [];
       const stack = [[c, r]];
-      const maxLen = 3 + Math.floor(rng() * 6);
+      const wideHall = rng() < 0.26;
+      const maxLen = wideHall ? 6 + Math.floor(rng() * 7) : 3 + Math.floor(rng() * 6);
       const localVisited = new Set([r * cols + c]);
 
       while (stack.length && hallCells.length < maxLen) {
         const [cc, cr] = stack.pop();
         if (owner[cr][cc] !== -1) continue;
         hallCells.push([cc, cr]);
+        if (wideHall && hallCells.length < maxLen) {
+          for (const [wc, wr] of [[cc + 1, cr], [cc, cr + 1]]) {
+            if (wc >= 0 && wc < cols && wr >= 0 && wr < rows && owner[wr][wc] === -1) {
+              const wk = wr * cols + wc;
+              if (!localVisited.has(wk)) {
+                localVisited.add(wk);
+                hallCells.push([wc, wr]);
+                break;
+              }
+            }
+          }
+        }
         const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
         for (let i = dirs.length - 1; i > 0; i--) {
           const j = Math.floor(rng() * (i + 1));
@@ -287,7 +305,7 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
       const minDoorDist = z.doors.length
         ? Math.min(...z.doors.map(d => Math.hypot(pt.x - d.x, pt.z - d.z)))
         : 10;
-      if (touchesWall && minDoorDist >= 2.2) scored.push({ ...pt, score: minDoorDist });
+      if (touchesWall && minDoorDist >= 2.7) scored.push({ ...pt, score: minDoorDist });
     }
     scored.sort((a, b) => b.score - a.score);
     z.wallCells = scored.length ? scored : z.cells.map(([c, r]) => cellCenter(c, r));
@@ -297,6 +315,7 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
   const wallBoxes = [];
   const ceilings = [];
   const thickness = 0.24;
+  const jambOffset = LABYRINTH_CELL / 2 - LABYRINTH_JAMB / 2;
 
   const pushBox = (cx, cz, bw, bh, bd, baseY, kind, tint) => {
     wallBoxes.push({ x: cx, z: cz, y: baseY, rx: bw / 2, ry: bh / 2, rz: bd / 2, height: bh, kind, tint });
@@ -319,9 +338,9 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
       if (ch === 'D' || ch === 'E') {
         const cx = minX + (c + 0.5) * LABYRINTH_CELL;
         const cz = minZ + r * LABYRINTH_CELL;
-        // Distinct 1.4m doorway frame (0.3m side jambs + top lintel)
-        pushBox(cx - 0.85, cz, 0.30, LABYRINTH_HEIGHT, thickness, 0, 'labWall', tint);
-        pushBox(cx + 0.85, cz, 0.30, LABYRINTH_HEIGHT, thickness, 0, 'labWall', tint);
+        // Distinct 2.0m doorway frame (side jambs + top lintel)
+        pushBox(cx - jambOffset, cz, LABYRINTH_JAMB, LABYRINTH_HEIGHT, thickness, 0, 'labWall', tint);
+        pushBox(cx + jambOffset, cz, LABYRINTH_JAMB, LABYRINTH_HEIGHT, thickness, 0, 'labWall', tint);
         pushBox(cx, cz, LABYRINTH_CELL, LABYRINTH_HEIGHT - LABYRINTH_DOOR_HEIGHT, thickness, LABYRINTH_DOOR_HEIGHT, 'labLintel', tint);
       }
       c++;
@@ -345,8 +364,8 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
       if (ch === 'D' || ch === 'E') {
         const cx = minX + c * LABYRINTH_CELL;
         const cz = minZ + (r + 0.5) * LABYRINTH_CELL;
-        pushBox(cx, cz - 0.85, thickness, LABYRINTH_HEIGHT, 0.30, 0, 'labWall', tint);
-        pushBox(cx, cz + 0.85, thickness, LABYRINTH_HEIGHT, 0.30, 0, 'labWall', tint);
+        pushBox(cx, cz - jambOffset, thickness, LABYRINTH_HEIGHT, LABYRINTH_JAMB, 0, 'labWall', tint);
+        pushBox(cx, cz + jambOffset, thickness, LABYRINTH_HEIGHT, LABYRINTH_JAMB, 0, 'labWall', tint);
         pushBox(cx, cz, thickness, LABYRINTH_HEIGHT - LABYRINTH_DOOR_HEIGHT, LABYRINTH_CELL, LABYRINTH_DOOR_HEIGHT, 'labLintel', tint);
       }
       r++;
@@ -395,11 +414,11 @@ export function createLabyrinth(seed, sizeMeters = 64, ammoScale = 1.0) {
       for (let h = 0; h < maxH; h++) {
         const cell = z.cells[Math.floor(rng() * z.cells.length)];
         const pt = cellCenter(cell[0], cell[1]);
-        const ox = (rng() - 0.5) * 0.72;
-        const oz = (rng() - 0.5) * 0.72;
+        const ox = (rng() - 0.5) * 1.1;
+        const oz = (rng() - 0.5) * 1.1;
         const hKind = HAZARD_KINDS[Math.floor(rng() * HAZARD_KINDS.length)];
-        const r = hKind === 'puddles' ? 0.58 + rng() * 0.28 : 0.48 + rng() * 0.24;
-        if (!hazards.some(existing => Math.hypot(existing.x - (pt.x + ox), existing.z - (pt.z + oz)) < 1.9)) {
+        const r = hKind === 'puddles' ? 0.65 + rng() * 0.30 : 0.54 + rng() * 0.26;
+        if (!hazards.some(existing => Math.hypot(existing.x - (pt.x + ox), existing.z - (pt.z + oz)) < 2.3)) {
           hazards.push({ id: `haz:${hazards.length}`, kind: hKind, x: pt.x + ox, z: pt.z + oz, r, zoneId: z.id, turn: rng() * Math.PI * 2 });
         }
       }

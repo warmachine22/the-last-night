@@ -1,7 +1,7 @@
 import { distance } from './world.js';
 
-export const WAKE_RADIUS = 22;
-export const SLEEP_RADIUS = 28;
+export const WAKE_RADIUS = 26;
+export const SLEEP_RADIUS = 34;
 
 // Populate every predetermined room (1-5 zombies) and hallway roamer from the labyrinth blueprint.
 export function populateWorldRoster(run, createMonster) {

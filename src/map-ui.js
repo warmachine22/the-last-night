@@ -28,7 +28,7 @@ export function drawFieldMapAndInventory(ctx, width, height, run, hint = '', sec
   for (const w of snap.weapons) {
     ctx.fillStyle = w.equipped ? '#e8c47a' : '#96a595';
     ctx.font = (w.equipped ? 'bold ' : '') + '20px monospace';
-    const qty = w.spray ? '∞ paint' : `${w.ammo}/${w.capacity} loaded`;
+    const qty = `${w.ammo}/${w.capacity} loaded`;
     ctx.fillText(`${w.equipped ? '▶ ' : '  '}${w.name.padEnd(18, ' ')}  ${qty}`, 44, y);
     y += 34;
   }
@@ -41,7 +41,7 @@ export function drawFieldMapAndInventory(ctx, width, height, run, hint = '', sec
 
   ctx.fillStyle = '#9aa89b';
   ctx.font = '17px monospace';
-  ctx.fillText('Use your fixed 30s flashlight & Spray Can wisely. Avoid puddles, pebbles & twigs.', 44, height - 108);
+  ctx.fillText('Use your fixed 30s flashlight wisely. Avoid puddles, pebbles & dry branches.', 44, height - 108);
   ctx.fillText('Find the single perimeter EXIT chamber while keeping spare rounds.', 44, height - 80);
 
   if (hint) {

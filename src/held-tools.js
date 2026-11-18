@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GUNS } from './simulation.js';
 
 const forward = new THREE.Vector3(0, 0, -1);
-const names = [...Object.keys(GUNS).filter(k => k !== 'spraycan'), 'flashlight', 'glove'];
+const names = [...Object.keys(GUNS), 'flashlight', 'glove'];
 const degrees = Math.PI / 180;
 const foregripGuns = new Set(['shotgun', 'smg', 'carbine']);
 const grabDistance = .15;
@@ -15,7 +15,6 @@ const recoilTuning = {
   shotgun: { pitch: 11.5, yaw: .85, travel: .062, recovery: .15 },
   smg: { pitch: 3.2, yaw: .36, travel: .014, recovery: .145 },
   carbine: { pitch: 6.3, yaw: .50, travel: .036, recovery: .105 },
-  spraycan: { pitch: .2, yaw: .1, travel: .002, recovery: .08 },
 };
 
 export const gunAngle = value => Math.max(-25, Math.min(25, Math.round(Number.isFinite(value) ? value : 0)));
@@ -38,12 +37,6 @@ export function toolLayouts(art) {
     const support = name in GUNS ? socket('SupportSocket').multiplyScalar(scale).add(offset) : null;
     return [name, { scale, offset, muzzle, support }];
   }));
-  layouts.spraycan = {
-    scale: 1,
-    offset: new THREE.Vector3(0, -0.02, -0.01),
-    muzzle: new THREE.Vector3(0, 0.055, -0.052),
-    support: new THREE.Vector3(0, -0.02, -0.03),
-  };
   const lamp = layouts.flashlight, scale = .45;
   const rail = layouts.pistol.muzzle.clone().add(new THREE.Vector3(0, -.041, .132));
   layouts.pistolLamp = {

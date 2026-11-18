@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addEnemy, BUILD, createRun, enemyPose, shoot, STEP, stepRun, UPGRADES } from '../src/simulation.js';
+import { addEnemy, BUILD, createRun, ENEMIES, enemyPose, GUNS, shoot, STEP, stepRun, UPGRADES } from '../src/simulation.js';
 import { DIFFICULTIES } from '../src/difficulty.js';
-import { createLabyrinth } from '../src/labyrinth.js';
+import { createLabyrinth, LABYRINTH_CELL, LABYRINTH_HEIGHT } from '../src/labyrinth.js';
 
 function advance(run, seconds, input = {}) {
   const steps = Math.round(seconds / STEP);
@@ -11,8 +11,11 @@ function advance(run, seconds, input = {}) {
   return events;
 }
 
-test('all three difficulty maze sizes (64m, 96m, 144m) generate fully connected rooms, hallways, hazards, and one exit', () => {
-  assert.equal(BUILD, '2.1.1');
+test('all three difficulty maze sizes (78m, 114m, 156m) have high ceilings, mix of tight and big spaces, and one exit', () => {
+  assert.equal(BUILD, '2.2.0');
+  assert.ok(LABYRINTH_HEIGHT >= 4.0, `ceiling height should be tall (>=4.0m), got ${LABYRINTH_HEIGHT}`);
+  assert.ok(LABYRINTH_CELL >= 3.0, `cell width should be wider (>=3.0m), got ${LABYRINTH_CELL}`);
+
   for (const [key, spec] of Object.entries(DIFFICULTIES)) {
     const lab = createLabyrinth('seed-' + key, spec.mazeSize, spec.ammoScale);
     assert.equal(lab.sizeMeters, spec.mazeSize);
@@ -20,6 +23,10 @@ test('all three difficulty maze sizes (64m, 96m, 144m) generate fully connected 
     assert.ok(lab.zones.every(z => z.distFromStart < Infinity));
     assert.ok(lab.exit && lab.exitZone.kind === 'exit');
     assert.ok(lab.hazards.some(h => h.kind === 'pebbles') && lab.hazards.some(h => h.kind === 'branches') && lab.hazards.some(h => h.kind === 'puddles'));
+
+    const roomWidths = lab.zones.filter(z => z.kind === 'room').map(z => z.bounds.maxX - z.bounds.minX);
+    assert.ok(roomWidths.some(w => w <= 9.1), 'must include tight rooms/spaces');
+    assert.ok(roomWidths.some(w => w >= 12.0), 'must include big open rooms (>= 12m wide)');
 
     const perRoomCounts = new Map();
     for (const s of lab.zombieSpawns) {
@@ -33,11 +40,16 @@ test('all three difficulty maze sizes (64m, 96m, 144m) generate fully connected 
   }
 });
 
-test('non-upgradable 30s flashlight works and dry-fire emits a weak spark', () => {
+test('non-upgradable 30s flashlight works, dry-fire sparks, spray can is removed, and zombies are 30% faster', () => {
   assert.equal('battery' in UPGRADES, false);
   assert.equal('lens' in UPGRADES, false);
+  assert.equal('spraycan' in GUNS, false);
+
+  assert.ok(ENEMIES.shambler.chaseSpeed >= 1.35 && ENEMIES.shrieker.chaseSpeed >= 1.70 && ENEMIES.brute.chaseSpeed >= 1.18);
+  assert.ok(DIFFICULTIES.standard.speedLimit >= 1.50 && DIFFICULTIES.nightmare.speedLimit >= 1.70);
 
   const flRun = createRun('fl-mode', { populate: false, difficulty: 'standard' });
+  assert.equal('spraycan' in flRun.player.magazines, false);
   assert.equal(flRun.player.flashlight, true);
   const lamp = { origin: { x: flRun.player.x, y: flRun.player.y + 1.4, z: flRun.player.z }, ray: { x: 0, y: 0, z: -1 } };
   advance(flRun, 15, { lamp });
@@ -51,34 +63,6 @@ test('non-upgradable 30s flashlight works and dry-fire emits a weak spark', () =
   flRun.player.reserve = 0;
   const dryEv = stepRun(flRun, { fire: true, aim: lamp });
   assert.ok(dryEv.some(e => e.type === 'dry' && e.spark && e.range <= 4));
-});
-
-test('spray can toggles like a weapon and stamps valid non-zero surface-normal marks onto walls and floors', () => {
-  const run = createRun('spray-test', { populate: false });
-  assert.ok('spraycan' in run.player.magazines);
-  stepRun(run, { cycleWeapon: true });
-  assert.equal(run.player.weapon, 'spraycan');
-  run.player.cooldown = 0;
-
-  const sprayFloor = { origin: { x: run.player.x, y: 1.4, z: run.player.z }, ray: { x: 0, y: -1, z: -0.4 } };
-  const sprayWall = { origin: { x: run.player.x, y: 1.4, z: run.player.z }, ray: { x: 0, y: 0, z: -1 } };
-  const evFloor = stepRun(run, { fire: true, aim: sprayFloor });
-  run.player.cooldown = 0;
-  const evWall = stepRun(run, { fire: true, aim: sprayWall });
-  assert.ok(evFloor.some(e => e.type === 'spray' && e.ny > 0.9 && Math.hypot(e.nx, e.ny, e.nz) > 0.9));
-  assert.ok(evWall.some(e => e.type === 'spray' && Math.abs(e.nz) > 0.9 && Math.hypot(e.nx, e.ny, e.nz) > 0.9));
-  assert.equal(run.paintMarks.length, 2);
-
-  // Even when aiming tightly up against a wall box, normal must stay finite & unit length
-  const tightAim = { origin: { x: run.player.x, y: 1.4, z: run.player.z - 2.95 }, ray: { x: 0, y: 0, z: -1 } };
-  run.player.cooldown = 0;
-  stepRun(run, { fire: true, aim: tightAim });
-  for (const m of run.paintMarks) {
-    assert.ok(Number.isFinite(m.x + m.y + m.z) && Math.hypot(m.nx, m.ny, m.nz) > 0.9);
-  }
-
-  stepRun(run, { cycleWeapon: true });
-  assert.equal(run.player.weapon, 'pistol');
 });
 
 test('1 headshot kills regulars, 2-3 body shots kill regulars, brutes need 3 headshots or 6 body shots', () => {
@@ -117,7 +101,7 @@ test('1 headshot kills regulars, 2-3 body shots kill regulars, brutes need 3 hea
 test('idle zombies wait hidden without wandering past doors, ambush from behind, chase briefly out, return home, and cap voices at <= 4', () => {
   const run = createRun('ambush-ai', { populate: false, difficulty: 'standard' });
   const lab = run.world.labyrinth;
-  const room = lab.zones.find(z => z.kind === 'room' && z.doors.length > 0 && z.wallCells.length >= 2);
+  const room = lab.zones.find(z => z.kind === 'room' && z.doors.length > 0 && z.wallCells.length >= 2 && Math.hypot(z.wallCells[0].x, z.wallCells[0].z) < 22);
   assert.ok(room);
 
   // 1) Hidden idle zombies stay completely still at e.home instead of wandering past doorways
@@ -130,21 +114,23 @@ test('idle zombies wait hidden without wandering past doors, ambush from behind,
 
   // 2) Walking past / turning back inside/near room doorway triggers rear ambush & short pursuit across doorway
   const door = room.doors[0];
-  run.player.x = spot.x + (door.x - spot.x) * 0.5;
-  run.player.z = spot.z + (door.z - spot.z) * 0.5;
-  run.player.yaw = Math.atan2(door.x - spot.x, -(door.z - spot.z)); // facing away from ambusher!
+  const ddx = door.x - spot.x, ddz = door.z - spot.z, dlen = Math.hypot(ddx, ddz) || 1;
+  const stepDist = Math.min(2.8, dlen * 0.8);
+  run.player.x = spot.x + (ddx / dlen) * stepDist;
+  run.player.z = spot.z + (ddz / dlen) * stepDist;
+  run.player.yaw = Math.atan2(ddx, -ddz); // facing away from ambusher!
   advance(run, 0.4, {});
   assert.equal(ambusher.alerted, true, 'passing zombie with back turned should trigger rear ambush');
   assert.equal(ambusher.reason, 'ambush');
 
-  // Step player just outside the doorway (< 11m from ambusher.home) -> chases out briefly
-  run.player.x = door.x + (door.x - room.center.x) * 1.4;
-  run.player.z = door.z + (door.z - room.center.z) * 1.4;
+  // Step player outside (> room corner distance, < MAX_TETHER_FROM_HOME) -> chases out briefly
+  run.player.x = door.x + (door.x - room.center.x) * 0.45;
+  run.player.z = door.z + (door.z - room.center.z) * 0.45;
   advance(run, 1.5, {});
   assert.ok(ambusher.tactic?.role === 'pursuit');
 
   // 3) Getting too far away causes zombie to break chase and return to e.home
-  run.player.x = spot.x + 22;
+  run.player.x = spot.x + 24;
   advance(run, 0.8, {});
   assert.equal(ambusher.tactic?.role, 'returning');
 

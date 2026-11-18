@@ -1,7 +1,7 @@
 import { distance } from './world.js';
 
-export const MAX_TETHER_FROM_HOME = 11.5;
-export const MAX_PURSUIT_PLAYER_DIST = 12.5;
+export const MAX_TETHER_FROM_HOME = 15.0;
+export const MAX_PURSUIT_PLAYER_DIST = 16.0;
 
 // Fast bounded grid BFS across open/doorway edges (<= 85 cells) so zombies can pursue out
 // of their room for a short tether distance and return cleanly back through doorways.

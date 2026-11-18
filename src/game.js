@@ -551,8 +551,6 @@ function handleEvent(batch) {
       setNotice(event.quiet ? `Brushed ${event.kind}` : `Stepped in ${event.kind}!`, 1.1);
     } else if (event.type === 'wallBump') {
       xr.haptic('wallBump', settings);
-    } else if (event.type === 'spray') {
-      if (event.sound) xr.haptic('spray', settings);
     } else if (event.type === 'shot') {
       if (event.weapon === 'shotgun') shotgunFiredAt = run.time;
       handling.kick(settings.leftHanded);
@@ -578,13 +576,8 @@ function updateHUD(force = false) {
   text('hud-parts', DIFFICULTIES[run.difficulty].name.toUpperCase());
   text('weapon-name', GUNS[p.weapon].name.toUpperCase());
   const rounds = count => String(count).padStart(2, '0');
-  if (GUNS[p.weapon].spray) {
-    $('rounds').firstChild.textContent = 'PAINT ';
-    $('rounds').lastChild.textContent = '∞';
-  } else {
-    $('rounds').firstChild.textContent = rounds(p.ammo) + ' ';
-    $('rounds').lastChild.textContent = '/ ' + p.reserve;
-  }
+  $('rounds').firstChild.textContent = rounds(p.ammo) + ' ';
+  $('rounds').lastChild.textContent = '/ ' + p.reserve;
   const light = (p.flashlight ? p.beam.toUpperCase() : 'RECHARGING') + ' · ' + display + '%';
   text('light-text', light);
   $('charge').style.transform = 'scaleX(' + p.battery + ')';
@@ -637,7 +630,7 @@ function xrUI(sample, trackedView) {
         title: 'The Last Night',
         lines: [
           'Difficulty: ' + DIFFICULTIES[settings.difficulty].name + '   (X changes size & danger)',
-          'Fixed 30s flashlight + muzzle light. Toggle Spray Can (B) to mark walls & floors.',
+          'Fixed 30s flashlight + bright muzzle light to reveal fast ambushers.',
           'Headshots kill regulars (2-3 body). Brutes take 3 head / 6 body. Zombies ambush from behind!',
           'Manage scarce ammo and escape through the single perimeter EXIT.',
         ],
@@ -810,8 +803,7 @@ function frame(now, xrFrame) {
   }
 
   if (phase === 'playing' && !stereo) {
-    const isSpray = run.player.weapon === 'spraycan';
-    const point = view.aim.origin.clone().addScaledVector(view.aim.ray, isSpray ? 4.2 : 27).project(camera);
+    const point = view.aim.origin.clone().addScaledVector(view.aim.ray, 27).project(camera);
     $('crosshair').style.left = (point.x + 1) * 50 + '%';
     $('crosshair').style.top = (1 - point.y) * 50 + '%';
     updateHUD();

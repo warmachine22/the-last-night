@@ -1,4 +1,4 @@
-import { createLabyrinth, LABYRINTH_CELL, LABYRINTH_DOOR_HEIGHT, LABYRINTH_HEIGHT } from './labyrinth.js';
+import { createLabyrinth, LABYRINTH_CELL, LABYRINTH_DOOR_HEIGHT, LABYRINTH_HEIGHT, LABYRINTH_JAMB } from './labyrinth.js';
 
 export const CHUNK = 48;
 export const START = { x: 0, z: 0 };
@@ -62,12 +62,14 @@ function circleHitsBox(x, z, radius, bx, bz, rx, rz) {
 }
 
 export function createWorld(seed, opts = {}) {
-  const mazeSize = opts.mazeSize || 64;
+  const mazeSize = opts.mazeSize || 78;
   const ammoScale = opts.ammoScale || 1.0;
   const labyrinth = createLabyrinth(seed, mazeSize, ammoScale);
   const { cols, rows, minX, maxX, minZ, maxZ, hEdges, vEdges } = labyrinth;
   const ht = 0.12;
   const pad = 0.048;
+  const halfJamb = LABYRINTH_JAMB / 2;
+  const jambOffset = LABYRINTH_CELL / 2 - halfJamb;
   const chunks = new Map();
 
   const makeChunk = (cx, cz) => {
@@ -138,8 +140,8 @@ export function createWorld(seed, opts = {}) {
         if (ch === '#') {
           if (circleHitsBox(x, z, radius, xCell, zLine, LABYRINTH_CELL / 2 + pad, ht)) return true;
         } else if (ch === 'D' || ch === 'E') {
-          if (circleHitsBox(x, z, radius, xCell - 0.85, zLine, 0.15, ht)) return true;
-          if (circleHitsBox(x, z, radius, xCell + 0.85, zLine, 0.15, ht)) return true;
+          if (circleHitsBox(x, z, radius, xCell - jambOffset, zLine, halfJamb, ht)) return true;
+          if (circleHitsBox(x, z, radius, xCell + jambOffset, zLine, halfJamb, ht)) return true;
         }
       }
     }
@@ -154,8 +156,8 @@ export function createWorld(seed, opts = {}) {
         if (ch === '#') {
           if (circleHitsBox(x, z, radius, xLine, zCell, ht, LABYRINTH_CELL / 2 + pad)) return true;
         } else if (ch === 'D' || ch === 'E') {
-          if (circleHitsBox(x, z, radius, xLine, zCell - 0.85, ht, 0.15)) return true;
-          if (circleHitsBox(x, z, radius, xLine, zCell + 0.85, ht, 0.15)) return true;
+          if (circleHitsBox(x, z, radius, xLine, zCell - jambOffset, ht, halfJamb)) return true;
+          if (circleHitsBox(x, z, radius, xLine, zCell + jambOffset, ht, halfJamb)) return true;
         }
       }
     }
@@ -196,8 +198,8 @@ export function createWorld(seed, opts = {}) {
       if (ch === '#') {
         hitEdge(x0 - pad, x1 + pad, 0, LABYRINTH_HEIGHT, zL - ht, zL + ht, 'labWall');
       } else {
-        hitEdge(x0, x0 + 0.30, 0, LABYRINTH_HEIGHT, zL - ht, zL + ht, 'labWall');
-        hitEdge(x1 - 0.30, x1, 0, LABYRINTH_HEIGHT, zL - ht, zL + ht, 'labWall');
+        hitEdge(x0, x0 + LABYRINTH_JAMB, 0, LABYRINTH_HEIGHT, zL - ht, zL + ht, 'labWall');
+        hitEdge(x1 - LABYRINTH_JAMB, x1, 0, LABYRINTH_HEIGHT, zL - ht, zL + ht, 'labWall');
         hitEdge(x0, x1, LABYRINTH_DOOR_HEIGHT, LABYRINTH_HEIGHT, zL - ht, zL + ht, 'labLintel');
       }
     }
@@ -208,8 +210,8 @@ export function createWorld(seed, opts = {}) {
       if (ch === '#') {
         hitEdge(xL - ht, xL + ht, 0, LABYRINTH_HEIGHT, z0 - pad, z1 + pad, 'labWall');
       } else {
-        hitEdge(xL - ht, xL + ht, 0, LABYRINTH_HEIGHT, z0, z0 + 0.30, 'labWall');
-        hitEdge(xL - ht, xL + ht, 0, LABYRINTH_HEIGHT, z1 - 0.30, z1, 'labWall');
+        hitEdge(xL - ht, xL + ht, 0, LABYRINTH_HEIGHT, z0, z0 + LABYRINTH_JAMB, 'labWall');
+        hitEdge(xL - ht, xL + ht, 0, LABYRINTH_HEIGHT, z1 - LABYRINTH_JAMB, z1, 'labWall');
         hitEdge(xL - ht, xL + ht, LABYRINTH_DOOR_HEIGHT, LABYRINTH_HEIGHT, z0, z1, 'labLintel');
       }
     }

@@ -249,7 +249,7 @@ export function createXR(renderer, scene, rig) {
     const s = sources[leftHand ? 'left' : 'right'];
     const strengths = {
       shotgun: [.79, 52], smg: [.37, 22], armor: [.89, 125],
-      carbine: [.64, 40], pistol: [.51, 32], spray: [.14, 14], dry: [.18, 16],
+      carbine: [.64, 40], pistol: [.51, 32], dry: [.18, 16],
       wallBump: [.22, 18], hazardStep: [.30, 24], dotHit: [.42, 26],
     };
     const spec = strengths[kind];
